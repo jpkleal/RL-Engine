@@ -1,0 +1,28 @@
+[project]
+name = "rl-engine"
+version = "0.1.0"
+description = ""
+authors = [
+    {name = "jpkleal",email = "45352137+jpkleal@users.noreply.github.com"}
+]
+readme = "README.md"
+requires-python = ">=3.12"
+
+[tool.poetry]
+packages = [{include = "rl_engine", from = "src"}]
+
+[[tool.poetry.source]]
+name = "pytorch-cu12"
+url = "https://pytorch.org"
+priority = "explicit"
+
+[tool.poetry.dependencies]
+torch = "2.7.*"
+tensorboard = "^2.20.0"
+
+[tool.poetry.scripts]
+train = "main:main"
+
+[build-system]
+requires = ["poetry-core>=2.0.0,<3.0.0"]
+build-backend = "poetry.core.masonry.api"
