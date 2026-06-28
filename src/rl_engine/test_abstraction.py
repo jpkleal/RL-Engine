@@ -6,7 +6,7 @@ import socket
 import time
 from typing import Any, Dict, Optional
 
-from commons import TestResult, TestCase, TestAbstractionError, InputModule
+from .commons import TestResult, TestCase, TestAbstractionError, InputModule
 
 logger = logging.getLogger("rl_engine.test_abstraction")
 
