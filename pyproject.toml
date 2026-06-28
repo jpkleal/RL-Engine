@@ -3,7 +3,7 @@ name = "rl-engine"
 version = "0.1.0"
 description = ""
 authors = [
-    {name = "jpkleal",email = "45352137+jpkleal@users.noreply.github.com"}
+    {name = "jpkleal",email = "jpkleal@gmail.com"}
 ]
 readme = "README.md"
 requires-python = ">=3.12"
