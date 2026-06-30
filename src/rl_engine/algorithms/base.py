@@ -16,11 +16,11 @@ Shared utilities for the algorithms package.
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Dict, Optional, Protocol, Union, runtime_checkable
+from typing import Dict, Protocol, Union, runtime_checkable
 
 import torch
 
-from .buffer import Buffer
+from src.rl_engine.buffers.buffer import Buffer
 from ..model import TrainableModel
 
 PathLike = Union[str, Path]

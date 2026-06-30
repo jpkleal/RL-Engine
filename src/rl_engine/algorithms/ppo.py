@@ -32,7 +32,7 @@ import torch.nn.functional as F
 
 from ..config import PPOConfig
 from ..model import TrainableModel
-from ..rollout_buffer import RolloutBuffer
+from ..buffers.rollout_buffer import RolloutBuffer
 from .base import Metrics, PathLike, ingest_to_buffers
 from .nets import ValueNetwork
 

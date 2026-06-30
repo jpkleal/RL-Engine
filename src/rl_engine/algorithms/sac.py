@@ -33,7 +33,7 @@ import torch.nn.functional as F
 
 from ..config import SACConfig
 from ..model import TrainableModel
-from ..replay_memory import ReplayMemory
+from src.rl_engine.buffers.replay_memory import ReplayMemory
 from .base import Metrics, PathLike, ingest_to_buffers
 from .nets import QNetwork
 
