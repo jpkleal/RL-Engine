@@ -82,7 +82,7 @@ class TestAbstraction:
         )
 
         payload: Dict[str, Any] = {
-            "teste_case": test_case_value,
+            "test_case": test_case_value,
             "batch_size": batch_size,
             "input_module": module_value,
             "verbose_out": verbose_out,
