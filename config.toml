@@ -5,7 +5,7 @@ connect_timeout = 5.0
 ack_timeout = 5.0
 
 [training]
-algorithm = "ppo"        # "sac" or "ppo"
+algorithm = "sac"        # "sac" or "ppo"
 role_ids = ["striker", "goalkeeper"]
 state_dim = 16
 action_dim = 4

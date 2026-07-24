@@ -100,7 +100,7 @@ class TestAbstraction:
             self._send_json(sock, payload)
             logger.debug("Sent start_test payload: %s", payload)
 
-            result_timeout = self._await_ack(sock)
+            result_timeout = 90  # self._await_ack(sock)
             logger.debug(
                 "Received ack from runner, waiting up to %.1fs for result", result_timeout
             )
@@ -181,13 +181,13 @@ class TestAbstraction:
         except json.JSONDecodeError as e:
             return TestResult(success=False, error=f"malformed result message: {e}")
 
-        if not isinstance(msg, dict) or "failed" not in msg:
+        if not isinstance(msg, dict) or "status" not in msg:
             return TestResult(
                 success=False, error=f"result message missing required 'failed' field: {msg}"
             )
 
-        failed = bool(msg["failed"])
-        result_file = msg.get("result_file")
+        failed = bool(msg["status"] == "error")
+        result_file = msg.get("history_files")[0]
 
         return TestResult(
             success=not failed,
