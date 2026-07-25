@@ -26,7 +26,7 @@ from typing import Dict, List, Optional, Sequence, Union
 
 import torch
 
-from .transition_io import extract_role, parse_transition, read_new_complete_lines
+from .transition_io import parse_transition, read_new_complete_lines
 
 logger = logging.getLogger("rl_engine.rollout_buffer")
 
@@ -93,13 +93,8 @@ class RolloutBuffer:
                 logger.warning("Skipping malformed transition in %s: %s", path, e)
                 continue
 
-            if role_filter is not None:
-                role = extract_role(obj)
-                if role is not None and role != role_filter:
-                    continue
-
             try:
-                s, a, r, s_next, done, _role = parse_transition(
+                s, a, r, s_next, done = parse_transition(
                     obj, self.state_shape, self.action_shape, self.state_dtype, self.action_dtype
                 )
             except Exception as e:  # noqa: BLE001
