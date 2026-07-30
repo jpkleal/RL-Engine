@@ -4,7 +4,7 @@ used by both ReplayMemory and RolloutBuffer so the two buffer types
 (off-policy / on-policy) don't duplicate this.
 
 FILE FORMAT, one JSON object per line:
-    {"s": [...], "s'": [...], "a": ..., "r": ...}
+    {"next_state": [...], "cur_state": [...], "actions": ..., "rewards": ..., "done": true|false}
 
 Optionally tagged with a role/agent id (see ROLE_ALIASES below) -- this
 isn't in the original spec, but is needed to let a single shared/
@@ -16,10 +16,9 @@ don't pass a role_filter -- everything still works as a single stream.
 
 from __future__ import annotations
 
-import json
 import logging
 from pathlib import Path
-from typing import List, Optional, Sequence, Tuple, Union
+from typing import List, Sequence, Tuple, Union
 
 import torch
 
@@ -27,9 +26,11 @@ logger = logging.getLogger("rl_engine.transition_io")
 
 PathLike = Union[str, Path]
 
-NEXT_STATE_ALIASES = ("s'", "s_prime", "next_state", "s2")
-DONE_ALIASES = ("done", "terminal", "is_terminal")
-ROLE_ALIASES = ("role", "agent_id", "id")
+NEXT_STATE = "next_state"
+CURRENT_STATE = "cur_state"
+REWARD = "rewards"
+ACTION = "actions"
+DONE = "done"
 
 
 def read_new_complete_lines(path: PathLike, offset: int) -> Tuple[List[bytes], int]:
@@ -54,41 +55,21 @@ def read_new_complete_lines(path: PathLike, offset: int) -> Tuple[List[bytes], i
     return lines, offset + len(complete)
 
 
-def extract_role(obj: dict) -> Optional[str]:
-    """Cheap pre-check: get a transition's role/agent tag, if any, without
-    doing full shape-validated parsing. Lets callers skip lines for other
-    roles before paying the cost of (and logging spurious warnings from)
-    parse_transition's shape validation against the wrong role's shapes."""
-    role = next((obj[k] for k in ROLE_ALIASES if k in obj), None)
-    return str(role) if role is not None else None
-
-
 def parse_transition(
     obj: dict,
     state_shape: Sequence[int],
     action_shape: Sequence[int],
     state_dtype: torch.dtype,
     action_dtype: torch.dtype,
-) -> Tuple[torch.Tensor, torch.Tensor, float, torch.Tensor, bool, Optional[str]]:
-    """Returns (s, a, r, s_next, done, role). Raises ValueError on any
+) -> Tuple[torch.Tensor, torch.Tensor, float, torch.Tensor, bool]:
+    """Returns (s, a, r, s_next, done). Raises ValueError on any
     missing field or shape mismatch -- callers should catch and skip."""
-    if "s" not in obj or "a" not in obj or "r" not in obj:
-        raise ValueError(f"transition missing required field(s): {obj}")
 
-    next_state_raw = next((obj[k] for k in NEXT_STATE_ALIASES if k in obj), None)
-    if next_state_raw is None:
-        raise ValueError(
-            f"transition missing next-state field (tried {NEXT_STATE_ALIASES}): {obj}"
-        )
-
-    done_raw = next((obj[k] for k in DONE_ALIASES if k in obj), False)
-    role = next((obj[k] for k in ROLE_ALIASES if k in obj), None)
-
-    s = torch.tensor(obj["s"], dtype=state_dtype)
-    s_next = torch.tensor(next_state_raw, dtype=state_dtype)
-    a = torch.tensor(obj["a"], dtype=action_dtype)
-    r = float(obj["r"])
-    done = bool(done_raw)
+    s = torch.tensor(_get_field(obj, CURRENT_STATE), dtype=state_dtype)
+    s_next = torch.tensor(_get_field(obj, NEXT_STATE), dtype=state_dtype)
+    a = torch.tensor(_get_field(obj, ACTION), dtype=action_dtype)
+    r = float(_get_field(obj, REWARD))
+    done = bool(_get_field(obj, DONE))
 
     state_shape, action_shape = tuple(state_shape), tuple(action_shape)
     if tuple(s.shape) != state_shape:
@@ -98,4 +79,10 @@ def parse_transition(
     if tuple(a.shape) != action_shape:
         raise ValueError(f"action shape {tuple(a.shape)} != expected {action_shape}")
 
-    return s, a, r, s_next, done, (str(role) if role is not None else None)
+    return s, a, r, s_next, done
+
+
+def _get_field(obj, field_name):
+    if field_name not in obj:
+        raise ValueError(f"transition missing required '{field_name}' field: {obj}")
+    return obj[field_name]

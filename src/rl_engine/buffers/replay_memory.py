@@ -45,7 +45,7 @@ from typing import Dict, Optional, Sequence, Union
 
 import torch
 
-from .transition_io import extract_role, parse_transition, read_new_complete_lines
+from .transition_io import parse_transition, read_new_complete_lines
 
 logger = logging.getLogger("rl_engine.replay_memory")
 
@@ -293,21 +293,16 @@ class ReplayMemory:
                 obj = json.loads(raw_line)
             except Exception as e:  # noqa: BLE001
                 skipped += 1
-                logger.warning("Skipping malformed transition in %s: %s", path, e)
+                logger.warning("Skipping load malformed transition in %s: %s", path, e)
                 continue
 
-            if role_filter is not None:
-                role = extract_role(obj)
-                if role is not None and role != role_filter:
-                    continue  # belongs to a different role -- not an error, just not ours
-
             try:
-                s, a, r, s_next, done, _role = parse_transition(
+                s, a, r, s_next, done = parse_transition(
                     obj, self.state_shape, self.action_shape, self.state_dtype, self.action_dtype
                 )
             except Exception as e:  # noqa: BLE001 -- one bad line shouldn't kill ingestion
                 skipped += 1
-                logger.warning("Skipping malformed transition in %s: %s", path, e)
+                logger.warning("Skipping parse malformed transition in %s: %s", path, e)
                 continue
 
             states.append(s)
