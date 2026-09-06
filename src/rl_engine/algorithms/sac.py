@@ -13,7 +13,7 @@ Network layout:
 Zero-sum convention:
     The critic is trained on the protagonist's (first role's) reward
     convention throughout. The antagonist's rewards are negated when
-    computing critic targets since r_antagonmist = -r_protagonist.
+    computing critic targets since r_antagonist = -r_protagonist.
     The antagonist's actor loss is also negated -- it minimises Q
     rather than maximises it.
 
@@ -33,7 +33,7 @@ import torch.nn.functional as F
 
 from ..utils.config import SACConfig
 from ..model import TrainableModel
-from src.rl_engine.buffers.replay_memory import ReplayMemory
+from ..buffers.replay_memory import ReplayMemory
 from .base import Metrics, PathLike
 from .nets import QNetwork, ingest_to_buffers
 
@@ -41,12 +41,12 @@ from .nets import QNetwork, ingest_to_buffers
 class SharedCriticSAC:
 
     def __init__(
-            self,
-            role_ids: Tuple[str, str],
-            state_dim: int,
-            action_dim: int,
-            cfg: SACConfig = SACConfig(),
-            device: str = "cpu",
+        self,
+        role_ids: Tuple[str, str],
+        state_dim: int,
+        action_dim: int,
+        cfg: SACConfig = SACConfig(),
+        device: str = "cpu",
     ):
         self.device = torch.device(device)
         self.gamma = cfg.gamma
@@ -151,7 +151,7 @@ class SharedCriticSAC:
         tmp.replace(path)
 
     def load_checkpoint(
-            self, path: PathLike, device: Union[str, torch.device] = "cpu"
+        self, path: PathLike, device: Union[str, torch.device] = "cpu"
     ) -> None:
         state = torch.load(Path(path), map_location="cpu", weights_only=False)
         self.load_state_dict(state, device=device)
@@ -191,14 +191,13 @@ class SharedCriticSAC:
             q1_t_ant = self._q1_target(s_next_ant, next_a_ant)
             q2_t_ant = self._q2_target(s_next_ant, next_a_ant)
             q_next_ant = torch.min(q1_t_ant, q2_t_ant) - alphas[ant] * log_pi_next_ant
-            # Negate: critic always in protagonist convention
-            target_ant = -r_ant + self.gamma * (1 - done_ant) * q_next_ant
+            target_ant = r_ant + self.gamma * (1 - done_ant) * q_next_ant
 
         critic_loss = (
-                F.mse_loss(self._q1(s_pro, a_pro), target_pro)
-                + F.mse_loss(self._q2(s_pro, a_pro), target_pro)
-                + F.mse_loss(self._q1(s_ant, a_ant), target_ant)
-                + F.mse_loss(self._q2(s_ant, a_ant), target_ant)
+            F.mse_loss(self._q1(s_pro, a_pro), target_pro)
+            + F.mse_loss(self._q2(s_pro, a_pro), target_pro)
+            + F.mse_loss(self._q1(s_ant, a_ant), target_ant)
+            + F.mse_loss(self._q2(s_ant, a_ant), target_ant)
         )
         self._critic_optimizer.zero_grad()
         critic_loss.backward()
@@ -231,14 +230,14 @@ class SharedCriticSAC:
         alpha_loss_pro = alpha_loss_ant = torch.tensor(0.0)
         if self.auto_alpha:
             alpha_loss_pro = -(
-                    self._log_alphas[pro] * (log_pi_pro + self._target_entropy).detach()
+                self._log_alphas[pro] * (log_pi_pro + self._target_entropy).detach()
             ).mean()
             self._alpha_optimizers[pro].zero_grad()
             alpha_loss_pro.backward()
             self._alpha_optimizers[pro].step()
 
             alpha_loss_ant = -(
-                    self._log_alphas[ant] * (log_pi_ant + self._target_entropy).detach()
+                self._log_alphas[ant] * (log_pi_ant + self._target_entropy).detach()
             ).mean()
             self._alpha_optimizers[ant].zero_grad()
             alpha_loss_ant.backward()
@@ -249,13 +248,13 @@ class SharedCriticSAC:
         self._soft_update(self._q2_target, self._q2)
 
         return {
-            "critic_loss": critic_loss.item() / 4,
-            f"{pro}/actor_loss": actor_loss_pro.item(),
-            f"{ant}/actor_loss": actor_loss_ant.item(),
-            f"{pro}/alpha": alphas[pro].item(),
-            f"{ant}/alpha": alphas[ant].item(),
-            f"{pro}/alpha_loss": alpha_loss_pro.item() if self.auto_alpha else 0.0,
-            f"{ant}/alpha_loss": alpha_loss_ant.item() if self.auto_alpha else 0.0,
+            "critic_loss":        critic_loss.item() / 4,
+            f"{pro}/actor_loss":  actor_loss_pro.item(),
+            f"{ant}/actor_loss":  actor_loss_ant.item(),
+            f"{pro}/alpha":       alphas[pro].item(),
+            f"{ant}/alpha":       alphas[ant].item(),
+            f"{pro}/alpha_loss":  alpha_loss_pro.item() if self.auto_alpha else 0.0,
+            f"{ant}/alpha_loss":  alpha_loss_ant.item() if self.auto_alpha else 0.0,
         }
 
     # ------------------------------------------------------------------ #
@@ -264,17 +263,17 @@ class SharedCriticSAC:
 
     def state_dict(self) -> dict:
         state = {
-            "actors": {r: a.state_dict() for r, a in self._actors.items()},
-            "log_stds": {r: p.detach().cpu() for r, p in self._log_stds.items()},
-            "q1": self._q1.state_dict(),
-            "q2": self._q2.state_dict(),
-            "q1_target": self._q1_target.state_dict(),
-            "q2_target": self._q2_target.state_dict(),
+            "actors":           {r: a.state_dict() for r, a in self._actors.items()},
+            "log_stds":         {r: p.detach().cpu() for r, p in self._log_stds.items()},
+            "q1":               self._q1.state_dict(),
+            "q2":               self._q2.state_dict(),
+            "q1_target":        self._q1_target.state_dict(),
+            "q2_target":        self._q2_target.state_dict(),
             "critic_optimizer": self._critic_optimizer.state_dict(),
             "actor_optimizers": {r: o.state_dict() for r, o in self._actor_optimizers.items()},
-            "log_alphas": {r: p.detach().cpu() for r, p in self._log_alphas.items()},
-            "auto_alpha": self.auto_alpha,
-            "buffers": {r: b.to_state_dict() for r, b in self._buffers.items()},
+            "log_alphas":       {r: p.detach().cpu() for r, p in self._log_alphas.items()},
+            "auto_alpha":       self.auto_alpha,
+            "buffers":          {r: b.to_state_dict() for r, b in self._buffers.items()},
         }
         if self.auto_alpha:
             state["alpha_optimizers"] = {
@@ -283,7 +282,7 @@ class SharedCriticSAC:
         return state
 
     def load_state_dict(
-            self, state: dict, device: Union[str, torch.device, None] = None
+        self, state: dict, device: Union[str, torch.device, None] = None
     ) -> None:
         device = torch.device(device) if device is not None else self.device
 
@@ -328,7 +327,7 @@ class SharedCriticSAC:
     # ------------------------------------------------------------------ #
 
     def _sample(
-            self, states: torch.Tensor, role_id: str
+        self, states: torch.Tensor, role_id: str
     ) -> Tuple[torch.Tensor, torch.Tensor]:
         """Reparameterised sample + log prob for role_id's actor."""
         mean = self._actors[role_id](states)
@@ -338,7 +337,7 @@ class SharedCriticSAC:
         x_t = normal.rsample()
         y_t = torch.tanh(x_t)
         log_pi = (
-                normal.log_prob(x_t) - torch.log(1 - y_t.pow(2) + 1e-6)
+            normal.log_prob(x_t) - torch.log(1 - y_t.pow(2) + 1e-6)
         ).sum(-1, keepdim=True)
         return y_t, log_pi
 

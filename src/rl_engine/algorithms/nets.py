@@ -60,6 +60,6 @@ def ingest_to_buffers(
     """Fan out ingest calls to per-role buffers from a shared transitions
     file, each buffer filtering for its own role-tagged lines."""
     return {
-        role_id: buf.ingest_new_transitions(path, role_filter=role_id)
+        role_id: buf.ingest_new_transitions(path, role_id=role_id)
         for role_id, buf in buffers.items()
     }

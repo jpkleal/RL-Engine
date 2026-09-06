@@ -28,11 +28,8 @@ ASSUMPTIONS (please confirm against the real producer of out.jsonl):
     and skipped rather than aborting ingestion of the rest of the file.
   * `out.jsonl` may still be being appended to while we read it. Only
     bytes up to the last complete "\n" are consumed.
-  * `role_filter` (optional) lets one combined file serve multiple
-    roles/agents if lines are tagged with a "role"/"agent_id" key --
-    see transition_io.ROLE_ALIASES. Untagged lines are always included
-    regardless of filter, so this is fully backward compatible with a
-    single-role file that has no role tagging at all.
+  * `role_id` selects which agent's action and reward to extract
+    from each timestep -- all agents share the same state vector.
 """
 
 from __future__ import annotations
@@ -264,19 +261,12 @@ class ReplayMemory:
     # Ingesting new transitions from out.jsonl
     # ------------------------------------------------------------------ #
 
-    def ingest_new_transitions(self, path: PathLike, role_filter: Optional[str] = None) -> int:
+    def ingest_new_transitions(self, path: PathLike, role_id: Optional[str] = None) -> int:
         """
-        Reads any lines appended to `path` since the last call against
-        this same path (or the whole file, the first time), parses each
-        as a transition, and pushes them into the buffer.
-
-        `role_filter`: if given, lines tagged with a different role/agent
-        id are skipped (untagged lines are always included). Lets one
-        combined transitions file serve multiple roles -- see
-        transition_io.ROLE_ALIASES.
-
-        Returns the number of transitions actually pushed (after any
-        role filtering).
+        Reads newly-appended lines from `path` and pushes this role's
+        transitions into the buffer. `role_id` selects which agent's
+        action to extract from each timestep (each line contains all
+        agents). Returns the number of transitions pushed.
         """
         path_str = str(Path(path).resolve())
         with self._lock:
@@ -291,18 +281,13 @@ class ReplayMemory:
         for raw_line in lines:
             try:
                 obj = json.loads(raw_line)
-            except Exception as e:  # noqa: BLE001
-                skipped += 1
-                logger.warning("Skipping load malformed transition in %s: %s", path, e)
-                continue
-
-            try:
                 s, a, r, s_next, done = parse_transition(
-                    obj, self.state_shape, self.action_shape, self.state_dtype, self.action_dtype
+                    obj, role_id, self.state_shape, self.action_shape,
+                    self.state_dtype, self.action_dtype
                 )
             except Exception as e:  # noqa: BLE001 -- one bad line shouldn't kill ingestion
                 skipped += 1
-                logger.warning("Skipping parse malformed transition in %s: %s", path, e)
+                logger.warning("Skipping malformed transition in %s: %s", path, e)
                 continue
 
             states.append(s)

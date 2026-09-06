@@ -31,6 +31,6 @@ class Buffer(Protocol):
         ...
 
     def ingest_new_transitions(
-        self, path: PathLike, role_filter: Optional[str] = None
+            self, path: PathLike, role_id: Optional[str] = None
     ) -> int:
         ...

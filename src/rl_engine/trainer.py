@@ -20,6 +20,7 @@ is encapsulated inside the algorithm.
 from __future__ import annotations
 
 import logging
+import os
 import time
 from pathlib import Path
 from typing import Callable, Dict, Optional, Union
@@ -122,6 +123,7 @@ class Trainer:
 
         try:
             counts = self.algorithm.ingest(path)
+            os.remove(path)
         except FileNotFoundError:
             logger.warning("epoch %d: transitions file not found: %s", epoch, path)
             return

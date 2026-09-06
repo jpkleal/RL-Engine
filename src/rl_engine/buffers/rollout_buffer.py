@@ -11,9 +11,9 @@ batch of fresh experience under the current policy, train on exactly
 that batch (often for several epochs), then discard it, since stale
 on-policy data is invalid for the next update.
 
-Shares the same out.jsonl parsing/file-cursor logic as ReplayMemory
-(see transition_io.py), including the same optional role_filter for
-pulling one role's data out of a combined multi-role file.
+Shares the same out.jsonl parsing logic as ReplayMemory
+(see transition_io.py). Each buffer extracts its own role's
+action and reward from each timestep.
 """
 
 from __future__ import annotations
@@ -71,10 +71,10 @@ class RolloutBuffer:
     # Ingesting new transitions from out.jsonl
     # ------------------------------------------------------------------ #
 
-    def ingest_new_transitions(self, path: PathLike, role_filter: Optional[str] = None) -> int:
-        """Same semantics as ReplayMemory.ingest_new_transitions: reads
-        only newly-appended complete lines, optionally filtered by role,
-        and appends them. Returns the number ingested."""
+    def ingest_new_transitions(self, path: PathLike, role_id: Optional[str] = None) -> int:
+        """Reads newly-appended lines from `path` and appends this role's
+        transitions. `role_id` selects which agent's action to extract
+        from each timestep. Returns the number ingested."""
         path_str = str(Path(path).resolve())
         with self._lock:
             offset = self._file_cursors.get(path_str, 0)
@@ -88,14 +88,9 @@ class RolloutBuffer:
         for raw_line in lines:
             try:
                 obj = json.loads(raw_line)
-            except Exception as e:  # noqa: BLE001
-                skipped += 1
-                logger.warning("Skipping malformed transition in %s: %s", path, e)
-                continue
-
-            try:
                 s, a, r, s_next, done = parse_transition(
-                    obj, self.state_shape, self.action_shape, self.state_dtype, self.action_dtype
+                    obj, role_id, self.state_shape, self.action_shape,
+                    self.state_dtype, self.action_dtype
                 )
             except Exception as e:  # noqa: BLE001
                 skipped += 1

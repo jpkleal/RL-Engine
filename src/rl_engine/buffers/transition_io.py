@@ -56,18 +56,27 @@ def read_new_complete_lines(path: PathLike, offset: int) -> Tuple[List[bytes], i
 
 
 def parse_transition(
-    obj: dict,
-    state_shape: Sequence[int],
-    action_shape: Sequence[int],
-    state_dtype: torch.dtype,
-    action_dtype: torch.dtype,
+        obj: dict,
+        role_id: str,
+        state_shape: Sequence[int],
+        action_shape: Sequence[int],
+        state_dtype: torch.dtype,
+        action_dtype: torch.dtype,
 ) -> Tuple[torch.Tensor, torch.Tensor, float, torch.Tensor, bool]:
-    """Returns (s, a, r, s_next, done). Raises ValueError on any
-    missing field or shape mismatch -- callers should catch and skip."""
+    """
+    Parse one timestep JSON object into a single-role transition.
+    Returns (s, a, r, s_next, done).
+
+    `role_id` selects which agent's action to extract from the actions
+    dict. The reward is signed per REWARD_SIGN so each role's buffer
+    holds its correct reward without the algorithm needing to negate.
+
+    Raises ValueError on missing fields or shape mismatches.
+    """
 
     s = torch.tensor(_get_field(obj, CURRENT_STATE), dtype=state_dtype)
     s_next = torch.tensor(_get_field(obj, NEXT_STATE), dtype=state_dtype)
-    a = torch.tensor(_get_field(obj, ACTION), dtype=action_dtype)
+    a = torch.tensor(_get_field(_get_field(obj, ACTION), role_id), dtype=action_dtype)
     r = float(_get_field(obj, REWARD))
     done = bool(_get_field(obj, DONE))
 

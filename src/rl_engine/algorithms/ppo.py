@@ -40,12 +40,12 @@ from .nets import ValueNetwork, ingest_to_buffers
 class SharedCriticPPO:
 
     def __init__(
-            self,
-            role_ids: Tuple[str, str],
-            state_dim: int,
-            action_dim: int,
-            cfg: PPOConfig = PPOConfig(),
-            device: str = "cpu",
+        self,
+        role_ids: Tuple[str, str],
+        state_dim: int,
+        action_dim: int,
+        cfg: PPOConfig = PPOConfig(),
+        device: str = "cpu",
     ):
         self.device = torch.device(device)
         self.gamma = cfg.gamma
@@ -129,7 +129,7 @@ class SharedCriticPPO:
         tmp.replace(path)
 
     def load_checkpoint(
-            self, path: PathLike, device: Union[str, torch.device] = "cpu"
+        self, path: PathLike, device: Union[str, torch.device] = "cpu"
     ) -> None:
         state = torch.load(Path(path), map_location="cpu", weights_only=False)
         self.load_state_dict(state, device=device)
@@ -147,8 +147,8 @@ class SharedCriticPPO:
         # Compute GAE advantages and value targets for both roles.
         # Protagonist uses rewards as-is; antagonist rewards are negated
         # so the shared value network stays in protagonist convention.
-        adv_pro, ret_pro = self._gae(batch_pro, sign=1.0)
-        adv_ant, ret_ant = self._gae(batch_ant, sign=-1.0)
+        adv_pro, ret_pro = self._gae(batch_pro)
+        adv_ant, ret_ant = self._gae(batch_ant)
 
         # Compute old log-probs (needed for the clipped surrogate ratio).
         # Done before any weight updates so these are truly "old policy".
@@ -258,7 +258,7 @@ class SharedCriticPPO:
         }
 
     def load_state_dict(
-            self, state: dict, device: Union[str, torch.device, None] = None
+        self, state: dict, device: Union[str, torch.device, None] = None
     ) -> None:
         device = torch.device(device) if device is not None else self.device
 
@@ -287,16 +287,12 @@ class SharedCriticPPO:
     # ------------------------------------------------------------------ #
 
     def _gae(
-            self, batch: Dict[str, torch.Tensor], sign: float
+        self, batch: Dict[str, torch.Tensor]
     ) -> Tuple[torch.Tensor, torch.Tensor]:
-        """Generalised Advantage Estimation.
-
-        `sign` is +1 for the protagonist (rewards used as-is) and -1 for
-        the antagonist (rewards negated to protagonist convention before
-        computing value targets with the shared critic).
-        """
+        """Generalised Advantage Estimation. Reward sign is already correct
+        in the buffer (negated at ingestion time for the antagonist)."""
         s = batch["s"].float()
-        r = batch["r"].float() * sign
+        r = batch["r"].float()
         s_next = batch["s_next"].float()
         done = batch["done"].float()
         n = s.shape[0]
@@ -317,7 +313,7 @@ class SharedCriticPPO:
         return advantages, returns
 
     def _log_prob(
-            self, states: torch.Tensor, actions: torch.Tensor, role_id: str
+        self, states: torch.Tensor, actions: torch.Tensor, role_id: str
     ) -> torch.Tensor:
         mean = self._actors[role_id](states)
         log_std = self._log_stds[role_id].clamp(-20, 2)
@@ -326,7 +322,7 @@ class SharedCriticPPO:
         return dist.log_prob(actions).sum(-1)
 
     def _log_prob_and_entropy(
-            self, states: torch.Tensor, actions: torch.Tensor, role_id: str
+        self, states: torch.Tensor, actions: torch.Tensor, role_id: str
     ) -> Tuple[torch.Tensor, torch.Tensor]:
         mean = self._actors[role_id](states)
         log_std = self._log_stds[role_id].clamp(-20, 2)
