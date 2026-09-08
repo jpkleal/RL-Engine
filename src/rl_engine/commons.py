@@ -6,6 +6,7 @@ from typing import Optional, Dict, Any
 class TestCase(str, Enum):
     """Known test cases. Extend as the runner adds more."""
     SHOOTOUT = "SHOOTOUT"
+    TEST = "TEST"
 
 
 class InputModule(str, Enum):
