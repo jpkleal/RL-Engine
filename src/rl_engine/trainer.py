@@ -105,7 +105,7 @@ class Trainer:
             test_case=self.test_case,
             batch_size=self.rollout_batch_size,
             input_module=self.input_module,
-            module_config={"event_type": "ModelUpdate", "event_data": event_data},
+            module_config={"type": "ModelUpdate", "event_data": event_data},
             verbose_out=self.verbose_out,
         )
         self.metrics_logger.log_scalar("rollout/success", float(result.success), step=epoch)
