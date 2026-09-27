@@ -56,10 +56,19 @@ class ValueNetwork(nn.Module):
 def ingest_to_buffers(
     buffers: Dict[str, Buffer],
     path: PathLike,
+    reward_keys=None,
+    reward_signs=None
 ) -> Dict[str, int]:
     """Fan out ingest calls to per-role buffers from a shared transitions
     file, each buffer filtering for its own role-tagged lines."""
+    reward_keys = reward_keys or {}
+    reward_signs = reward_signs or {}
     return {
-        role_id: buf.ingest_new_transitions(path, role_id=role_id)
+        role_id: buf.ingest_new_transitions(
+            path,
+            role_id=role_id,
+            reward_key=reward_keys.get(role_id),
+            reward_sign=reward_signs.get(role_id, 1.0),
+        )
         for role_id, buf in buffers.items()
     }

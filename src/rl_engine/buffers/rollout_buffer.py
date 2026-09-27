@@ -26,7 +26,7 @@ from typing import Dict, List, Optional, Sequence, Union
 
 import torch
 
-from .transition_io import parse_transition, read_new_complete_lines
+from .transition_io import IngestStats, parse_transition, read_new_complete_lines
 
 logger = logging.getLogger("rl_engine.rollout_buffer")
 
@@ -71,7 +71,10 @@ class RolloutBuffer:
     # Ingesting new transitions from out.jsonl
     # ------------------------------------------------------------------ #
 
-    def ingest_new_transitions(self, path: PathLike, role_id: Optional[str] = None) -> int:
+    def ingest_new_transitions(
+            self, path: PathLike, role_id: Optional[str] = None,
+            reward_key: Optional[str] = None, reward_sign: float = 1.0
+    ) -> int:
         """Reads newly-appended lines from `path` and appends this role's
         transitions. `role_id` selects which agent's action to extract
         from each timestep. Returns the number ingested."""
@@ -90,7 +93,8 @@ class RolloutBuffer:
                 obj = json.loads(raw_line)
                 s, a, r, s_next, done = parse_transition(
                     obj, role_id, self.state_shape, self.action_shape,
-                    self.state_dtype, self.action_dtype
+                    self.state_dtype, self.action_dtype,
+                    reward_key, reward_sign
                 )
             except Exception as e:  # noqa: BLE001
                 skipped += 1

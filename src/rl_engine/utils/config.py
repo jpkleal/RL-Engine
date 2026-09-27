@@ -23,9 +23,12 @@ class TrainingConfig:
     save_every_n_epochs: int = 10
     test_case: str = "SHOOTOUT"
     input_module: str = "NeonFC"
+    reward_keys: dict[str, str] = field(default_factory=dict)
+    zero_sum: bool = False
 
     def __post_init__(self):
         self.role_ids = tuple(self.role_ids)
+        self.reward_keys = {str(k): str(v) for k, v in dict(self.reward_keys).items()}
 
 
 @dataclass

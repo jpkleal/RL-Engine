@@ -47,6 +47,8 @@ class SharedCriticSAC:
         action_dim: int,
         cfg: SACConfig = SACConfig(),
         device: str = "cpu",
+        reward_keys=None,
+        zero_sum=False
     ):
         self.device = torch.device(device)
         self.gamma = cfg.gamma
@@ -116,6 +118,12 @@ class SharedCriticSAC:
             for role_id in role_ids
         }
 
+        self._reward_keys = {r: (reward_keys or {}).get(r, r) for r in role_ids}
+        self._reward_signs = {
+            role_ids[0]: 1.0,
+            role_ids[1]: -1.0 if zero_sum else 1.0,
+        }
+
     # ------------------------------------------------------------------ #
     # Algorithm Protocol
     # ------------------------------------------------------------------ #
@@ -125,7 +133,7 @@ class SharedCriticSAC:
         return dict(self._actors)
 
     def ingest(self, path: PathLike) -> Dict[str, int]:
-        return ingest_to_buffers(self._buffers, path)
+        return ingest_to_buffers(self._buffers, path, self._reward_keys, self._reward_signs)
 
     def ready(self) -> bool:
         return all(len(buf) >= self._min_buffer_size for buf in self._buffers.values())

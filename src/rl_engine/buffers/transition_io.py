@@ -17,8 +17,9 @@ don't pass a role_filter -- everything still works as a single stream.
 from __future__ import annotations
 
 import logging
+from dataclasses import dataclass
 from pathlib import Path
-from typing import List, Sequence, Tuple, Union
+from typing import List, Sequence, Tuple, Union, Optional
 
 import torch
 
@@ -31,6 +32,15 @@ CURRENT_STATE = "cur_state"
 REWARD = "rewards"
 ACTION = "actions"
 DONE = "done"
+
+
+@dataclass
+class IngestStats:
+    n: int = 0
+    skipped: int = 0
+    reward_sum: float = 0.0
+    n_nonzero_reward: int = 0
+    n_terminal: int = 0
 
 
 def read_new_complete_lines(path: PathLike, offset: int) -> Tuple[List[bytes], int]:
@@ -62,6 +72,8 @@ def parse_transition(
         action_shape: Sequence[int],
         state_dtype: torch.dtype,
         action_dtype: torch.dtype,
+        reward_key: Optional[str] = None,
+        reward_sign: float = 1.0,
 ) -> Tuple[torch.Tensor, torch.Tensor, float, torch.Tensor, bool]:
     """
     Parse one timestep JSON object into a single-role transition.
@@ -77,7 +89,7 @@ def parse_transition(
     s = torch.tensor(_get_field(obj, CURRENT_STATE), dtype=state_dtype)
     s_next = torch.tensor(_get_field(obj, NEXT_STATE), dtype=state_dtype)
     a = torch.tensor(_get_field(_get_field(obj, ACTION), role_id), dtype=action_dtype)
-    r = float(_get_field(obj, REWARD))
+    r = reward_sign * _extract_reward(obj, reward_key if reward_key is not None else role_id)
     done = bool(_get_field(obj, DONE))
 
     state_shape, action_shape = tuple(state_shape), tuple(action_shape)
@@ -89,6 +101,20 @@ def parse_transition(
         raise ValueError(f"action shape {tuple(a.shape)} != expected {action_shape}")
 
     return s, a, r, s_next, done
+
+
+def _extract_reward(obj, key) -> float:
+    """Reward is either a scalar shared by all roles, or a dict keyed by
+    agent. JSON turns int keys into strings, so compare as strings."""
+    raw = _get_field(obj, REWARD)
+    if isinstance(raw, dict):
+        k = str(key)
+        if k not in raw:
+            raise ValueError(
+                f"reward dict has no entry for {k!r} (available: {sorted(raw)})"
+            )
+        raw = raw[k]
+    return float(raw)
 
 
 def _get_field(obj, field_name):

@@ -42,7 +42,7 @@ from typing import Dict, Optional, Sequence, Union
 
 import torch
 
-from .transition_io import parse_transition, read_new_complete_lines
+from .transition_io import IngestStats, parse_transition, read_new_complete_lines
 
 logger = logging.getLogger("rl_engine.replay_memory")
 
@@ -261,7 +261,10 @@ class ReplayMemory:
     # Ingesting new transitions from out.jsonl
     # ------------------------------------------------------------------ #
 
-    def ingest_new_transitions(self, path: PathLike, role_id: Optional[str] = None) -> int:
+    def ingest_new_transitions(
+            self, path: PathLike, role_id: Optional[str] = None,
+            reward_key: Optional[str] = None, reward_sign: float = 1.0
+    ) -> IngestStats:
         """
         Reads newly-appended lines from `path` and pushes this role's
         transitions into the buffer. `role_id` selects which agent's
@@ -273,21 +276,22 @@ class ReplayMemory:
             offset = self._file_cursors.get(path_str, 0)
 
         lines, new_offset = read_new_complete_lines(path, offset)
+        stats = IngestStats()
         if not lines:
-            return 0
+            return stats
 
         states, actions, rewards, next_states, dones = [], [], [], [], []
-        skipped = 0
         for raw_line in lines:
             try:
                 obj = json.loads(raw_line)
                 s, a, r, s_next, done = parse_transition(
                     obj, role_id, self.state_shape, self.action_shape,
-                    self.state_dtype, self.action_dtype
+                    self.state_dtype, self.action_dtype,
+                    reward_key=reward_key, reward_sign=reward_sign,
                 )
             except Exception as e:  # noqa: BLE001 -- one bad line shouldn't kill ingestion
-                skipped += 1
-                logger.warning("Skipping malformed transition in %s: %s", path, e)
+                stats.skipped += 1
+                logger.error("Skipping malformed transition in %s: %s", path, e)
                 continue
 
             states.append(s)
@@ -295,6 +299,12 @@ class ReplayMemory:
             rewards.append(r)
             next_states.append(s_next)
             dones.append(done)
+
+            stats.reward_sum += r
+            if r != 0.0:
+                stats.n_nonzero_reward += 1
+            if done:
+                stats.n_terminal += 1
 
         if states:
             self._push_batch(
@@ -305,11 +315,15 @@ class ReplayMemory:
                 torch.tensor(dones, dtype=torch.bool),
             )
 
+        stats.n = len(states)
+
         with self._lock:
             self._file_cursors[path_str] = new_offset
 
-        if skipped:
-            logger.warning("Ingested %d transitions from %s (%d skipped)", len(states), path, skipped)
+        if stats.skipped:
+            logger.error(
+                "Ingested %d transitions from %s (%d SKIPPED)", stats.n, path, stats.skipped
+            )
         else:
-            logger.debug("Ingested %d transitions from %s", len(states), path)
-        return len(states)
+            logger.debug("Ingested %d transitions from %s", stats.n, path)
+        return stats

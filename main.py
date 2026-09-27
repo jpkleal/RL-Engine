@@ -31,7 +31,8 @@ def build_algorithm(cfg):
 
     if t.algorithm == "sac":
         from rl_engine.algorithms.sac import SharedCriticSAC
-        return SharedCriticSAC(role_ids, t.state_dim, t.action_dim, cfg.sac)
+        return SharedCriticSAC(role_ids, t.state_dim, t.action_dim, cfg.sac,
+                               reward_keys=t.reward_keys, zero_sum=t.zero_sum)
 
     elif t.algorithm == "ppo":
         from rl_engine.algorithms.ppo import SharedCriticPPO

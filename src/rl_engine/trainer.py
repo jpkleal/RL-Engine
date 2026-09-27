@@ -122,14 +122,17 @@ class Trainer:
             return
 
         try:
-            counts = self.algorithm.ingest(path)
+            stats = self.algorithm.ingest(path)
             os.remove(path)
         except FileNotFoundError:
             logger.warning("epoch %d: transitions file not found: %s", epoch, path)
             return
 
-        for role_id, n in counts.items():
-            self.metrics_logger.log_scalar(f"{role_id}/transitions_ingested", n, step=epoch)
+        for role_id, st in stats.items():
+            self.metrics_logger.log_scalar(f"{role_id}/transitions_ingested", st.n, step=epoch)
+            self.metrics_logger.log_scalar(f"{role_id}/ingest_skipped", st.skipped, step=epoch)
+            self.metrics_logger.log_scalar(f"{role_id}/episode_return", st.reward_sum, step=epoch)
+            self.metrics_logger.log_scalar(f"{role_id}/terminal_count", st.n_terminal, step=epoch)
 
         # 4. update
         update_metrics: Dict[str, float] = {}
