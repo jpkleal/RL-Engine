@@ -82,6 +82,7 @@ class PPOConfig:
 class PathsConfig:
     save_dir: str = "runs/training"
     log_dir: str = "runs/tensorboard"
+    keep_last_checkpoints: int = 5
 
 
 @dataclass

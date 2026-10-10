@@ -66,7 +66,7 @@ def build_trainer(cfg):
             result_timeout_base=cfg.runner.result_timeout_base,
             result_timeout_per_episode=cfg.runner.result_timeout_per_episode,
         ),
-        save_system=SaveSystem(cfg.paths.save_dir),
+        save_system=SaveSystem(cfg.paths.save_dir, keep_last=cfg.paths.keep_last_checkpoints),
         metrics_logger=MetricsLogger(cfg.paths.log_dir),
         test_case=TestCase(t.test_case),
         input_module=t.input_module,
