@@ -105,12 +105,21 @@ class Trainer:
 
     def run(self, num_epochs: Optional[int] = None) -> None:
         """Run until num_epochs is reached, or indefinitely if None."""
+        consecutive_failures = 0
         while True:
             if num_epochs is not None and self._epoch >= num_epochs:
                 logger.info("Reached %d epochs", num_epochs)
                 return
             if self._run_epoch():
+                consecutive_failures = 0
                 self._epoch += 1
+            else:
+                # A runner that isn't up yet shouldn't turn into a spin
+                # loop burning a core.
+                delay = min(30, 2 ** consecutive_failures)
+                logger.warning("Sleeping %ds before retrying epoch %d", delay, self._epoch)
+                consecutive_failures += 1
+                time.sleep(delay)
 
     def _resolve_paths(self, result: TestResult) -> Optional[List[PathLike]]:
         """Transitions resolver -> a list of paths.
