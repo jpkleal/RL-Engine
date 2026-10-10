@@ -28,6 +28,11 @@ class TrainingConfig:
     input_module: str = "NeonFC"
     reward_keys: dict[str, str] = field(default_factory=dict)
     zero_sum: bool = False
+    # Ask the playing service to sample from the trained Gaussian and to
+    # hold each sampled action for a few frames. Off by default so the
+    # default payload is unchanged.
+    stochastic_play: bool = False
+    action_hold_frames: int = 1
 
     def __post_init__(self):
         self.role_ids = tuple(self.role_ids)

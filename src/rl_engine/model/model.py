@@ -59,13 +59,24 @@ class TrainableModel(Model):
     # Playing-service-compatible checkpointing
     # ------------------------------------------------------------------ #
 
-    def save(self, path: PathLike) -> None:
+    def save(self, path: PathLike, log_std: Optional[torch.Tensor] = None) -> None:
         """
         Writes exactly the format playing_model.Model.load()/.update()
         expect. This is the method to call when handing a network off
         to the playing service.
+
+        `log_std` is optional: when present the playing service can sample
+        from the same Gaussian the policy was trained under instead of
+        always acting on the mean. Checkpoints written without it still
+        load -- play is just deterministic.
         """
-        self._atomic_save(path, {"layer_sizes": self.layer_sizes, "state_dict": self.state_dict()})
+        checkpoint: Dict[str, Any] = {
+            "layer_sizes": self.layer_sizes,
+            "state_dict": self.state_dict(),
+        }
+        if log_std is not None:
+            checkpoint["log_std"] = log_std.detach().cpu()
+        self._atomic_save(path, checkpoint)
 
     # ------------------------------------------------------------------ #
     # Training-resume checkpointing (superset of the above)

@@ -178,7 +178,7 @@ class SharedCriticSAC:
         paths = {}
         for role_id, actor in self._actors.items():
             p = dir_path / f"{role_id}.pt"
-            actor.save(p)
+            actor.save(p, log_std=self._log_stds[role_id])
             paths[role_id] = str(p)
         return paths
 

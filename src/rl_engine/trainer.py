@@ -51,6 +51,8 @@ class Trainer:
         save_every_n_epochs: int = 10,
         verbose_out: bool = True,
         transitions_path: Optional[TransitionsPathResolver] = None,
+        stochastic_play: bool = False,
+        action_hold_frames: int = 1,
     ):
         self.algorithm = algorithm
         self.test_abstraction = test_abstraction
@@ -61,6 +63,8 @@ class Trainer:
         self.rollout_batch_size = rollout_batch_size
         self.save_every_n_epochs = save_every_n_epochs
         self.verbose_out = verbose_out
+        self.stochastic_play = stochastic_play
+        self.action_hold_frames = action_hold_frames
         self._transitions_path = transitions_path or (lambda result: result.result_files)
 
         self._epoch = 0
@@ -113,7 +117,11 @@ class Trainer:
 
         # 1. snapshot policies for the playing service
         playing_paths = self.algorithm.save_for_playing(self.save_system.current_dir)
-        event_data = build_model_update_event(playing_paths)
+        event_data = build_model_update_event(
+            playing_paths,
+            stochastic=True if self.stochastic_play else None,
+            hold_frames=self.action_hold_frames if self.stochastic_play else None,
+        )
 
         # 2. run the test
         result = self.test_abstraction.start_test(

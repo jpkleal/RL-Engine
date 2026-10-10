@@ -18,6 +18,9 @@ class Model(nn.Module):
         assert len(layer_sizes) >= 2, "Need at least an input and output layer."
 
         self.id: str = model_id
+        # Optional: present only when the checkpoint was written by a
+        # stochastic policy. Stays None otherwise, meaning deterministic.
+        self.log_std: torch.Tensor | None = None
 
         layers = []
         for i, (in_size, out_size) in enumerate(zip(layer_sizes[:-1], layer_sizes[1:])):
@@ -35,10 +38,14 @@ class Model(nn.Module):
     def update(self, path: str) -> None:
         checkpoint = torch.load(path, weights_only=True)
         self.load_state_dict(checkpoint["state_dict"])
+        if "log_std" in checkpoint:
+            self.log_std = checkpoint["log_std"]
 
     @classmethod
     def load(cls, path: str, model_id: str | None = None) -> "Model":
         checkpoint = torch.load(path, weights_only=True)
         model = cls(checkpoint["layer_sizes"], model_id=model_id)
         model.load_state_dict(checkpoint["state_dict"])
+        if "log_std" in checkpoint:
+            model.log_std = checkpoint["log_std"]
         return model

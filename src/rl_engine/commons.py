@@ -46,5 +46,21 @@ def build_model_update_event(
         #       {"id": "striker", "file_path": "models/current/striker.pt"},
         #       {"id": "goalkeeper", "file_path": "models/current/goalkeeper.pt"},
         #    ]}
+
+    `stochastic` and `hold_frames` are only emitted when given, so the
+    default payload stays byte-identical to what an older playing service
+    understands. (It isn't the other way round: an older service raises
+    TypeError on the unknown keys, so only send them to one that has the
+    matching support.)
     """
-    return {"models": [{"id": mid, "file_path": path} for mid, path in model_paths.items()]}
+    extras: Dict[str, Any] = {}
+    if stochastic is not None:
+        extras["stochastic"] = stochastic
+    if hold_frames is not None:
+        extras["hold_frames"] = hold_frames
+
+    return {
+        "models": [
+            {"id": mid, "file_path": path, **extras} for mid, path in model_paths.items()
+        ]
+    }

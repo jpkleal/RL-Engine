@@ -72,6 +72,8 @@ def build_trainer(cfg):
         input_module=t.input_module,
         rollout_batch_size=t.rollout_batch_size,
         save_every_n_epochs=t.save_every_n_epochs,
+        stochastic_play=t.stochastic_play,
+        action_hold_frames=t.action_hold_frames,
     )
 
 
