@@ -145,10 +145,15 @@ class SharedCriticPPO:
         batch_ant = self._buffers[ant].get_all(device=self.device)
 
         # Compute GAE advantages and value targets for both roles.
-        # Protagonist uses rewards as-is; antagonist rewards are negated
-        # so the shared value network stays in protagonist convention.
-        adv_pro, ret_pro = self._gae(batch_pro)
-        adv_ant, ret_ant = self._gae(batch_ant)
+        # Each role's rewards are already signed correctly in its own
+        # buffer (see zero_sum in the config); the shared value network
+        # is trained on both roles' returns.
+        raw_adv_pro, ret_pro = self._gae(batch_pro)
+        raw_adv_ant, ret_ant = self._gae(batch_ant)
+        # Normalisation is a policy-loss concern only -- applying it
+        # before building the value target would change what we regress on.
+        adv_pro = self._normalize_advantages(raw_adv_pro)
+        adv_ant = self._normalize_advantages(raw_adv_ant)
 
         # Compute old log-probs (needed for the clipped surrogate ratio).
         # Done before any weight updates so these are truly "old policy".
@@ -289,8 +294,14 @@ class SharedCriticPPO:
     def _gae(
         self, batch: Dict[str, torch.Tensor]
     ) -> Tuple[torch.Tensor, torch.Tensor]:
-        """Generalised Advantage Estimation. Reward sign is already correct
-        in the buffer (negated at ingestion time for the antagonist)."""
+        """Generalised Advantage Estimation.
+
+        Returns (raw_advantages, returns). Both are un-normalised: the
+        value target has to be built from the raw advantages, since
+        normalising them first turns the regression target into something
+        that isn't a return at all. Normalisation for the policy loss
+        happens in update().
+        """
         s = batch["s"].float()
         r = batch["r"].float()
         s_next = batch["s_next"].float()
@@ -305,27 +316,51 @@ class SharedCriticPPO:
         gae = 0.0
         for t in reversed(range(n)):
             delta = r[t] + self.gamma * v_next[t] - v[t]
-            gae = delta + self.gamma * self.gae_lambda * gae
+            # (1 - done) cuts the trace at episode boundaries: without
+            # it the recursion carries the tail of one episode into the
+            # advantages of the next.
+            gae = delta + self.gamma * self.gae_lambda * (1 - done[t]) * gae
             advantages[t] = gae
 
-        advantages = (advantages - advantages.mean()) / (advantages.std() + 1e-8)
         returns = advantages + v
         return advantages, returns
+
+    @staticmethod
+    def _normalize_advantages(advantages: torch.Tensor) -> torch.Tensor:
+        return (advantages - advantages.mean()) / (advantages.std() + 1e-8)
 
     def _log_prob(
         self, states: torch.Tensor, actions: torch.Tensor, role_id: str
     ) -> torch.Tensor:
+        """Log-density of a tanh-squashed action.
+
+        The action the policy actually emits is tanh(u), so the density
+        has to be read off u = atanh(a) and corrected by the change of
+        variables. Scoring tanh(u) against an unsquashed Normal instead
+        would be the density of a policy that never actually acts that way.
+        """
         mean = self._actors[role_id](states)
         log_std = self._log_stds[role_id].clamp(-20, 2)
         std = log_std.exp().expand_as(mean)
+        a_c = actions.clamp(-1 + 1e-6, 1 - 1e-6)
+        u = torch.atanh(a_c)
         dist = torch.distributions.Normal(mean, std)
-        return dist.log_prob(actions).sum(-1)
+        return dist.log_prob(u).sum(-1) - torch.log(1 - a_c.pow(2) + 1e-6).sum(-1)
 
     def _log_prob_and_entropy(
         self, states: torch.Tensor, actions: torch.Tensor, role_id: str
     ) -> Tuple[torch.Tensor, torch.Tensor]:
+        """Log-density plus the pre-tanh Normal's entropy.
+
+        The entropy term stays the Normal's: that's the standard
+        approximation for squashed policies, since the exact squashed
+        density has no convenient closed form.
+        """
         mean = self._actors[role_id](states)
         log_std = self._log_stds[role_id].clamp(-20, 2)
         std = log_std.exp().expand_as(mean)
+        a_c = actions.clamp(-1 + 1e-6, 1 - 1e-6)
+        u = torch.atanh(a_c)
         dist = torch.distributions.Normal(mean, std)
-        return dist.log_prob(actions).sum(-1), dist.entropy().sum(-1)
+        logp = dist.log_prob(u).sum(-1) - torch.log(1 - a_c.pow(2) + 1e-6).sum(-1)
+        return logp, dist.entropy().sum(-1)
