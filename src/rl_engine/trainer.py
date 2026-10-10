@@ -69,6 +69,21 @@ class Trainer:
 
         self._epoch = 0
         self._resume_if_possible()
+        self._bootstrap_playing_models()
+
+    # ------------------------------------------------------------------ #
+    # Startup
+    # ------------------------------------------------------------------ #
+
+    def _bootstrap_playing_models(self) -> None:
+        """Write the initial playing checkpoints before the first epoch.
+
+        The playing service loads <role>.pt as it starts, which can happen
+        long before the first epoch completes. Without this the service
+        waits for files that only appear once _run_epoch() gets going.
+        """
+        paths = self.algorithm.save_for_playing(self.save_system.current_dir)
+        logger.info("Wrote initial playing models: %s", paths)
 
     # ------------------------------------------------------------------ #
     # Startup
