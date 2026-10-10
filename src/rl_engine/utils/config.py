@@ -11,6 +11,9 @@ class RunnerConfig:
     port: int = 9999
     connect_timeout: float = 5.0
     ack_timeout: float = 5.0
+    # The runner sends no ack, so the client derives its own deadline.
+    result_timeout_base: float = 60.0
+    result_timeout_per_episode: float = 30.0
 
 
 @dataclass
@@ -25,6 +28,11 @@ class TrainingConfig:
     input_module: str = "NeonFC"
     reward_keys: dict[str, str] = field(default_factory=dict)
     zero_sum: bool = False
+    # Ask the playing service to sample from the trained Gaussian and to
+    # hold each sampled action for a few frames. Off by default so the
+    # default payload is unchanged.
+    stochastic_play: bool = False
+    action_hold_frames: int = 1
 
     def __post_init__(self):
         self.role_ids = tuple(self.role_ids)
@@ -44,6 +52,11 @@ class SACConfig:
     replay_capacity: int = 200_000
     min_buffer_size: int = 1_000
     batch_size: int = 256
+    # One gradient step per epoch is one step per thousands of
+    # transitions, which barely moves the policy. Scale the number of
+    # steps to the data that actually arrived.
+    updates_per_transition: float = 0.25
+    max_updates_per_call: int = 5000
 
     def __post_init__(self):
         self.hidden_sizes = tuple(self.hidden_sizes)
@@ -69,6 +82,7 @@ class PPOConfig:
 class PathsConfig:
     save_dir: str = "runs/training"
     log_dir: str = "runs/tensorboard"
+    keep_last_checkpoints: int = 5
 
 
 @dataclass

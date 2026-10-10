@@ -2,20 +2,28 @@
 SharedCriticSAC
 ===============
 
-SAC for two zero-sum adversarial agents sharing a single Q-network pair.
+SAC for two roles, each with its own actor and its own twin critics.
 
 Network layout:
-    actor_<role>              one per role  --  state -> action mean (deployed to playing service)
-    log_std_<role>            one per role  --  learnable action std (training only)
-    q1, q2                    shared        --  (state, action) -> Q value
-    q1_target, q2_target      shared        --  slow-moving copies for stable targets
+    actor_<role>                        one per role  --  state -> action mean (deployed to playing service)
+    log_std_<role>                      one per role  --  learnable action std (training only)
+    q1_<role>, q2_<role>                one pair per role --  (state, action) -> Q value
+    q1_target_<role>, q2_target_<role>  one pair per role --  slow-moving copies for stable targets
+
+Why per-role critics:
+    The two roles don't necessarily share a reward function. In the TEST
+    scenario each robot gets its own shaped reward, and with
+    `zero_sum = true` the second role's rewards are already negated at
+    ingestion. Either way each role's buffer holds that role's own
+    (s, a, r), so one critic pair fitted to both roles' samples is
+    fitting two different functions at once -- and with no role input
+    it cannot tell them apart.
 
 Zero-sum convention:
-    The critic is trained on the protagonist's (first role's) reward
-    convention throughout. The antagonist's rewards are negated when
-    computing critic targets since r_antagonist = -r_protagonist.
-    The antagonist's actor loss is also negated -- it minimises Q
-    rather than maximises it.
+    Every actor maximises its own critic. There is no protagonist /
+    antagonist asymmetry here: adversarial behaviour comes from the
+    reward *signs* applied at ingestion (see `zero_sum` in the config),
+    not from flipping the sign of an actor loss.
 
 Each role has its own alpha (entropy temperature) since their
 exploration needs may differ even in a symmetric game.
@@ -24,6 +32,7 @@ exploration needs may differ even in a symmetric game.
 from __future__ import annotations
 
 import copy
+import logging
 from pathlib import Path
 from typing import Dict, Tuple, Union
 
@@ -36,6 +45,8 @@ from ..model import TrainableModel
 from ..buffers.replay_memory import ReplayMemory
 from .base import Metrics, PathLike
 from .nets import QNetwork, ingest_to_buffers
+
+logger = logging.getLogger("rl_engine.algorithms.sac")
 
 
 class SharedCriticSAC:
@@ -56,9 +67,10 @@ class SharedCriticSAC:
         self.auto_alpha = cfg.auto_alpha
         self._batch_size = cfg.batch_size
         self._min_buffer_size = cfg.min_buffer_size
+        self._updates_per_transition = cfg.updates_per_transition
+        self._max_updates_per_call = cfg.max_updates_per_call
+        self._pending = 0
         self._role_ids = role_ids
-        self._protagonist = role_ids[0]
-        self._antagonist = role_ids[1]
         self._target_entropy = float(-action_dim)
         hidden_sizes = cfg.hidden_sizes
 
@@ -74,18 +86,33 @@ class SharedCriticSAC:
             for role_id in role_ids
         }
 
-        # ── Shared twin critics ──────────────────────────────────────────
-        self._q1 = QNetwork(state_dim, action_dim, hidden_sizes).to(self.device)
-        self._q2 = QNetwork(state_dim, action_dim, hidden_sizes).to(self.device)
-        self._q1_target = copy.deepcopy(self._q1)
-        self._q2_target = copy.deepcopy(self._q2)
-        for p in [*self._q1_target.parameters(), *self._q2_target.parameters()]:
-            p.requires_grad_(False)
+        # ── Per-role twin critics ────────────────────────────────────────
+        self._q1: Dict[str, QNetwork] = {
+            role_id: QNetwork(state_dim, action_dim, hidden_sizes).to(self.device)
+            for role_id in role_ids
+        }
+        self._q2: Dict[str, QNetwork] = {
+            role_id: QNetwork(state_dim, action_dim, hidden_sizes).to(self.device)
+            for role_id in role_ids
+        }
+        self._q1_target: Dict[str, QNetwork] = {}
+        self._q2_target: Dict[str, QNetwork] = {}
+        for role_id in role_ids:
+            q1_target = copy.deepcopy(self._q1[role_id])
+            q2_target = copy.deepcopy(self._q2[role_id])
+            for p in [*q1_target.parameters(), *q2_target.parameters()]:
+                p.requires_grad_(False)
+            self._q1_target[role_id] = q1_target
+            self._q2_target[role_id] = q2_target
 
         # ── Optimizers ───────────────────────────────────────────────────
-        self._critic_optimizer = torch.optim.Adam(
-            list(self._q1.parameters()) + list(self._q2.parameters()), lr=cfg.critic_lr
-        )
+        self._critic_optimizers: Dict[str, torch.optim.Adam] = {
+            role_id: torch.optim.Adam(
+                list(self._q1[role_id].parameters()) + list(self._q2[role_id].parameters()),
+                lr=cfg.critic_lr,
+            )
+            for role_id in role_ids
+        }
         self._actor_optimizers: Dict[str, torch.optim.Adam] = {
             role_id: torch.optim.Adam(
                 list(self._actors[role_id].parameters()) + [self._log_stds[role_id]],
@@ -133,7 +160,11 @@ class SharedCriticSAC:
         return dict(self._actors)
 
     def ingest(self, path: PathLike) -> Dict[str, int]:
-        return ingest_to_buffers(self._buffers, path, self._reward_keys, self._reward_signs)
+        stats = ingest_to_buffers(self._buffers, path, self._reward_keys, self._reward_signs)
+        # Both roles see the same frames, so the max is the batch size
+        # rather than the sum.
+        self._pending += max((st.n for st in stats.values()), default=0)
+        return stats
 
     def ready(self) -> bool:
         return all(len(buf) >= self._min_buffer_size for buf in self._buffers.values())
@@ -147,7 +178,7 @@ class SharedCriticSAC:
         paths = {}
         for role_id, actor in self._actors.items():
             p = dir_path / f"{role_id}.pt"
-            actor.save(p)
+            actor.save(p, log_std=self._log_stds[role_id])
             paths[role_id] = str(p)
         return paths
 
@@ -169,101 +200,98 @@ class SharedCriticSAC:
     # ------------------------------------------------------------------ #
 
     def update(self) -> Metrics:
-        pro, ant = self._protagonist, self._antagonist
-        alphas = {r: self._log_alphas[r].exp() for r in self._role_ids}
+        """Runs as many gradient steps as the newly ingested data justifies.
 
-        batch_pro = self._buffers[pro].sample(self._batch_size, device=self.device)
-        batch_ant = self._buffers[ant].sample(self._batch_size, device=self.device)
-
-        s_pro = batch_pro["s"].float()
-        a_pro = batch_pro["a"].float()
-        r_pro = batch_pro["r"].float().unsqueeze(-1)
-        s_next_pro = batch_pro["s_next"].float()
-        done_pro = batch_pro["done"].float().unsqueeze(-1)
-
-        s_ant = batch_ant["s"].float()
-        a_ant = batch_ant["a"].float()
-        r_ant = batch_ant["r"].float().unsqueeze(-1)
-        s_next_ant = batch_ant["s_next"].float()
-        done_ant = batch_ant["done"].float().unsqueeze(-1)
-
-        # ── Critic ────────────────────────────────────────────────────
-        with torch.no_grad():
-            next_a_pro, log_pi_next_pro = self._sample(s_next_pro, pro)
-            q1_t_pro = self._q1_target(s_next_pro, next_a_pro)
-            q2_t_pro = self._q2_target(s_next_pro, next_a_pro)
-            q_next_pro = torch.min(q1_t_pro, q2_t_pro) - alphas[pro] * log_pi_next_pro
-            target_pro = r_pro + self.gamma * (1 - done_pro) * q_next_pro
-
-            next_a_ant, log_pi_next_ant = self._sample(s_next_ant, ant)
-            q1_t_ant = self._q1_target(s_next_ant, next_a_ant)
-            q2_t_ant = self._q2_target(s_next_ant, next_a_ant)
-            q_next_ant = torch.min(q1_t_ant, q2_t_ant) - alphas[ant] * log_pi_next_ant
-            target_ant = r_ant + self.gamma * (1 - done_ant) * q_next_ant
-
-        critic_loss = (
-            F.mse_loss(self._q1(s_pro, a_pro), target_pro)
-            + F.mse_loss(self._q2(s_pro, a_pro), target_pro)
-            + F.mse_loss(self._q1(s_ant, a_ant), target_ant)
-            + F.mse_loss(self._q2(s_ant, a_ant), target_ant)
+        Returns metrics averaged over those steps, plus the step count
+        itself so the ratio is visible in TensorBoard.
+        """
+        k = min(
+            self._max_updates_per_call,
+            max(1, round(self._pending * self._updates_per_transition)),
         )
-        self._critic_optimizer.zero_grad()
-        critic_loss.backward()
-        self._critic_optimizer.step()
+        self._pending = 0
 
-        # ── Actors (freeze critic during actor updates) ────────────────
-        for p in [*self._q1.parameters(), *self._q2.parameters()]:
-            p.requires_grad_(False)
+        totals: Dict[str, float] = {}
+        for _ in range(k):
+            for tag, value in self._update_once().items():
+                totals[tag] = totals.get(tag, 0.0) + value
 
-        # Protagonist: maximise Q
-        pi_pro, log_pi_pro = self._sample(s_pro, pro)
-        q_pi_pro = torch.min(self._q1(s_pro, pi_pro), self._q2(s_pro, pi_pro))
-        actor_loss_pro = (alphas[pro].detach() * log_pi_pro - q_pi_pro).mean()
-        self._actor_optimizers[pro].zero_grad()
-        actor_loss_pro.backward()
-        self._actor_optimizers[pro].step()
+        metrics = {tag: value / k for tag, value in totals.items()}
+        metrics["sac/gradient_steps"] = float(k)
+        return metrics
 
-        # Antagonist: minimise Q (+ q_pi instead of - q_pi)
-        pi_ant, log_pi_ant = self._sample(s_ant, ant)
-        q_pi_ant = torch.min(self._q1(s_ant, pi_ant), self._q2(s_ant, pi_ant))
-        actor_loss_ant = (alphas[ant].detach() * log_pi_ant + q_pi_ant).mean()
-        self._actor_optimizers[ant].zero_grad()
-        actor_loss_ant.backward()
-        self._actor_optimizers[ant].step()
+    def _update_once(self) -> Metrics:
+        alphas = {r: self._log_alphas[r].exp() for r in self._role_ids}
+        metrics: Dict[str, float] = {}
+        critic_losses = []
 
-        for p in [*self._q1.parameters(), *self._q2.parameters()]:
-            p.requires_grad_(True)
+        for role_id in self._role_ids:
+            batch = self._buffers[role_id].sample(self._batch_size, device=self.device)
+            s = batch["s"].float()
+            a = batch["a"].float()
+            r = batch["r"].float().unsqueeze(-1)
+            s_next = batch["s_next"].float()
+            done = batch["done"].float().unsqueeze(-1)
+            alpha = alphas[role_id]
 
-        # ── Alpha ──────────────────────────────────────────────────────
-        alpha_loss_pro = alpha_loss_ant = torch.tensor(0.0)
-        if self.auto_alpha:
-            alpha_loss_pro = -(
-                self._log_alphas[pro] * (log_pi_pro + self._target_entropy).detach()
-            ).mean()
-            self._alpha_optimizers[pro].zero_grad()
-            alpha_loss_pro.backward()
-            self._alpha_optimizers[pro].step()
+            # ── Critic ────────────────────────────────────────────────
+            with torch.no_grad():
+                next_a, log_pi_next = self._sample(s_next, role_id)
+                q_next = (
+                    torch.min(
+                        self._q1_target[role_id](s_next, next_a),
+                        self._q2_target[role_id](s_next, next_a),
+                    )
+                    - alpha * log_pi_next
+                )
+                target = r + self.gamma * (1 - done) * q_next
 
-            alpha_loss_ant = -(
-                self._log_alphas[ant] * (log_pi_ant + self._target_entropy).detach()
-            ).mean()
-            self._alpha_optimizers[ant].zero_grad()
-            alpha_loss_ant.backward()
-            self._alpha_optimizers[ant].step()
+            q1, q2 = self._q1[role_id], self._q2[role_id]
+            critic_loss = F.mse_loss(q1(s, a), target) + F.mse_loss(q2(s, a), target)
+            critic_optimizer = self._critic_optimizers[role_id]
+            critic_optimizer.zero_grad()
+            critic_loss.backward()
+            critic_optimizer.step()
+            critic_losses.append(critic_loss.item())
+            metrics[f"{role_id}/critic_loss"] = critic_loss.item()
 
-        # ── Soft target update ─────────────────────────────────────────
-        self._soft_update(self._q1_target, self._q1)
-        self._soft_update(self._q2_target, self._q2)
+            # ── Actor (freeze this role's critics during its update) ───
+            for p in [*q1.parameters(), *q2.parameters()]:
+                p.requires_grad_(False)
 
-        return {
-            "critic_loss":        critic_loss.item() / 4,
-            f"{pro}/actor_loss":  actor_loss_pro.item(),
-            f"{ant}/actor_loss":  actor_loss_ant.item(),
-            f"{pro}/alpha":       alphas[pro].item(),
-            f"{ant}/alpha":       alphas[ant].item(),
-            f"{pro}/alpha_loss":  alpha_loss_pro.item() if self.auto_alpha else 0.0,
-            f"{ant}/alpha_loss":  alpha_loss_ant.item() if self.auto_alpha else 0.0,
-        }
+            pi, log_pi = self._sample(s, role_id)
+            q_pi = torch.min(q1(s, pi), q2(s, pi))
+            actor_loss = (alpha.detach() * log_pi - q_pi).mean()
+            actor_optimizer = self._actor_optimizers[role_id]
+            actor_optimizer.zero_grad()
+            actor_loss.backward()
+            actor_optimizer.step()
+
+            for p in [*q1.parameters(), *q2.parameters()]:
+                p.requires_grad_(True)
+
+            metrics[f"{role_id}/actor_loss"] = actor_loss.item()
+            metrics[f"{role_id}/alpha"] = alpha.item()
+
+            # ── Alpha ──────────────────────────────────────────────────
+            if self.auto_alpha:
+                alpha_loss = -(
+                    self._log_alphas[role_id] * (log_pi + self._target_entropy).detach()
+                ).mean()
+                self._alpha_optimizers[role_id].zero_grad()
+                alpha_loss.backward()
+                self._alpha_optimizers[role_id].step()
+                metrics[f"{role_id}/alpha_loss"] = alpha_loss.item()
+            else:
+                metrics[f"{role_id}/alpha_loss"] = 0.0
+
+            # ── Soft target update ─────────────────────────────────────
+            self._soft_update(self._q1_target[role_id], self._q1[role_id])
+            self._soft_update(self._q2_target[role_id], self._q2[role_id])
+
+        # Reported as a single headline number (the mean over roles).
+        metrics["critic_loss"] = sum(critic_losses) / len(critic_losses)
+        return metrics
 
     # ------------------------------------------------------------------ #
     # Checkpointing
@@ -271,13 +299,14 @@ class SharedCriticSAC:
 
     def state_dict(self) -> dict:
         state = {
+            "format_version":    2,
             "actors":           {r: a.state_dict() for r, a in self._actors.items()},
             "log_stds":         {r: p.detach().cpu() for r, p in self._log_stds.items()},
-            "q1":               self._q1.state_dict(),
-            "q2":               self._q2.state_dict(),
-            "q1_target":        self._q1_target.state_dict(),
-            "q2_target":        self._q2_target.state_dict(),
-            "critic_optimizer": self._critic_optimizer.state_dict(),
+            "q1":               {r: q.state_dict() for r, q in self._q1.items()},
+            "q2":               {r: q.state_dict() for r, q in self._q2.items()},
+            "q1_target":        {r: q.state_dict() for r, q in self._q1_target.items()},
+            "q2_target":        {r: q.state_dict() for r, q in self._q2_target.items()},
+            "critic_optimizers": {r: o.state_dict() for r, o in self._critic_optimizers.items()},
             "actor_optimizers": {r: o.state_dict() for r, o in self._actor_optimizers.items()},
             "log_alphas":       {r: p.detach().cpu() for r, p in self._log_alphas.items()},
             "auto_alpha":       self.auto_alpha,
@@ -303,14 +332,27 @@ class SharedCriticSAC:
             if r in self._log_stds:
                 self._log_stds[r].data = log_std.to(device)
 
-        self._q1.load_state_dict(state["q1"])
-        self._q2.load_state_dict(state["q2"])
-        self._q1_target.load_state_dict(state["q1_target"])
-        self._q2_target.load_state_dict(state["q2_target"])
-        for net in (self._q1, self._q2, self._q1_target, self._q2_target):
-            net.to(device)
+        if state.get("format_version") != 2:
+            # Pre-per-role-critics checkpoints carry a single shared Q
+            # pair, which has no per-role counterpart. Everything else
+            # transfers; the critics start fresh and relearn.
+            logger.warning("legacy shared-critic checkpoint: critics re-initialised")
+        else:
+            for r in self._role_ids:
+                self._q1[r].load_state_dict(state["q1"][r])
+                self._q2[r].load_state_dict(state["q2"][r])
+                self._q1_target[r].load_state_dict(state["q1_target"][r])
+                self._q2_target[r].load_state_dict(state["q2_target"][r])
+            for r in self._role_ids:
+                for net in (
+                    self._q1[r], self._q2[r],
+                    self._q1_target[r], self._q2_target[r],
+                ):
+                    net.to(device)
+            for r, o in state["critic_optimizers"].items():
+                if r in self._critic_optimizers:
+                    self._critic_optimizers[r].load_state_dict(o)
 
-        self._critic_optimizer.load_state_dict(state["critic_optimizer"])
         for r, s in state["actor_optimizers"].items():
             if r in self._actor_optimizers:
                 self._actor_optimizers[r].load_state_dict(s)

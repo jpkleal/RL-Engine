@@ -36,7 +36,14 @@ def build_algorithm(cfg):
 
     elif t.algorithm == "ppo":
         from rl_engine.algorithms.ppo import SharedCriticPPO
-        return SharedCriticPPO(role_ids, t.state_dim, t.action_dim, cfg.ppo)
+        if t.action_hold_frames > 1:
+            logger.warning(
+                "action_hold_frames=%d with ppo: held actions are not fresh "
+                "on-policy samples, which PPO's importance ratio assumes",
+                t.action_hold_frames,
+            )
+        return SharedCriticPPO(role_ids, t.state_dim, t.action_dim, cfg.ppo,
+                               reward_keys=t.reward_keys, zero_sum=t.zero_sum)
 
     else:
         raise ValueError(f"unknown algorithm {t.algorithm!r}, expected 'sac' or 'ppo'")
@@ -56,13 +63,17 @@ def build_trainer(cfg):
             port=cfg.runner.port,
             connect_timeout=cfg.runner.connect_timeout,
             ack_timeout=cfg.runner.ack_timeout,
+            result_timeout_base=cfg.runner.result_timeout_base,
+            result_timeout_per_episode=cfg.runner.result_timeout_per_episode,
         ),
-        save_system=SaveSystem(cfg.paths.save_dir),
+        save_system=SaveSystem(cfg.paths.save_dir, keep_last=cfg.paths.keep_last_checkpoints),
         metrics_logger=MetricsLogger(cfg.paths.log_dir),
         test_case=TestCase(t.test_case),
         input_module=t.input_module,
         rollout_batch_size=t.rollout_batch_size,
         save_every_n_epochs=t.save_every_n_epochs,
+        stochastic_play=t.stochastic_play,
+        action_hold_frames=t.action_hold_frames,
     )
 
 

@@ -12,14 +12,38 @@ PathLike = Union[str, Path]
 
 
 class SaveSystem:
-    def __init__(self, root_dir: PathLike):
+    def __init__(self, root_dir: PathLike, keep_last: int = 5):
         self.root = Path(root_dir)
         self.checkpoints_dir = self.root / "checkpoints"
         self.current_dir = self.root / "current"
         self.index_path = self.root / "index.jsonl"
+        # Each SAC checkpoint embeds the whole replay buffer, so they run
+        # to tens of megabytes. Keep only the most recent few.
+        self.keep_last = keep_last
 
         for d in (self.checkpoints_dir, self.current_dir):
             d.mkdir(parents=True, exist_ok=True)
+
+    def _prune_old_checkpoints(self) -> None:
+        """Deletes epoch_*.pt beyond the newest `keep_last`.
+
+        Sorted by epoch number, not by name -- epoch_10 sorts before
+        epoch_9 alphabetically. latest.pt is never touched.
+        """
+        if self.keep_last is None or self.keep_last < 0:
+            return
+
+        versioned = []
+        for path in self.checkpoints_dir.glob("epoch_*.pt"):
+            try:
+                epoch = int(path.stem.split("_", 1)[1])
+            except ValueError:
+                continue
+            versioned.append((epoch, path))
+
+        for _, path in sorted(versioned, reverse=True)[self.keep_last:]:
+            logger.info("SaveSystem: pruning old checkpoint %s", path.name)
+            path.unlink(missing_ok=True)
 
     def save(
         self,
@@ -45,6 +69,8 @@ class SaveSystem:
         }
         with open(self.index_path, "a") as f:
             f.write(json.dumps(entry) + "\n")
+
+        self._prune_old_checkpoints()
 
         logger.info("SaveSystem: saved epoch %d (%d model files)", epoch, len(playing_paths))
         return entry

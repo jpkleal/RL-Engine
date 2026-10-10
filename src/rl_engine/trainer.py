@@ -5,8 +5,9 @@ Trainer
 The training loop. One epoch:
 
     1. Snapshot current policies to disk (playing-service format).
-    2. Call the test runner via TestAbstraction, get a result_file.
-    3. Feed the result_file to algorithm.ingest() -- each role's
+    2. Call the test runner via TestAbstraction, get back one history
+       file per episode in the batch.
+    3. Feed each result file to algorithm.ingest() -- each role's
        algorithm pulls its own transitions out internally.
     4. If algorithm.ready(), call algorithm.update() and log metrics.
     5. Every save_every_n_epochs, persist via SaveSystem.
@@ -23,7 +24,7 @@ import logging
 import os
 import time
 from pathlib import Path
-from typing import Callable, Dict, Optional, Union
+from typing import Callable, Dict, List, Optional, Union
 
 from .algorithms import Algorithm
 from .utils.metrics_logger import MetricsLogger
@@ -50,6 +51,8 @@ class Trainer:
         save_every_n_epochs: int = 10,
         verbose_out: bool = True,
         transitions_path: Optional[TransitionsPathResolver] = None,
+        stochastic_play: bool = False,
+        action_hold_frames: int = 1,
     ):
         self.algorithm = algorithm
         self.test_abstraction = test_abstraction
@@ -60,10 +63,27 @@ class Trainer:
         self.rollout_batch_size = rollout_batch_size
         self.save_every_n_epochs = save_every_n_epochs
         self.verbose_out = verbose_out
-        self._transitions_path = transitions_path or (lambda result: result.result_file)
+        self.stochastic_play = stochastic_play
+        self.action_hold_frames = action_hold_frames
+        self._transitions_path = transitions_path or (lambda result: result.result_files)
 
         self._epoch = 0
         self._resume_if_possible()
+        self._bootstrap_playing_models()
+
+    # ------------------------------------------------------------------ #
+    # Startup
+    # ------------------------------------------------------------------ #
+
+    def _bootstrap_playing_models(self) -> None:
+        """Write the initial playing checkpoints before the first epoch.
+
+        The playing service loads <role>.pt as it starts, which can happen
+        long before the first epoch completes. Without this the service
+        waits for files that only appear once _run_epoch() gets going.
+        """
+        paths = self.algorithm.save_for_playing(self.save_system.current_dir)
+        logger.info("Wrote initial playing models: %s", paths)
 
     # ------------------------------------------------------------------ #
     # Startup
@@ -85,20 +105,47 @@ class Trainer:
 
     def run(self, num_epochs: Optional[int] = None) -> None:
         """Run until num_epochs is reached, or indefinitely if None."""
+        consecutive_failures = 0
         while True:
             if num_epochs is not None and self._epoch >= num_epochs:
                 logger.info("Reached %d epochs", num_epochs)
                 return
-            self._run_epoch()
-            self._epoch += 1
+            if self._run_epoch():
+                consecutive_failures = 0
+                self._epoch += 1
+            else:
+                # A runner that isn't up yet shouldn't turn into a spin
+                # loop burning a core.
+                delay = min(30, 2 ** consecutive_failures)
+                logger.warning("Sleeping %ds before retrying epoch %d", delay, self._epoch)
+                consecutive_failures += 1
+                time.sleep(delay)
 
-    def _run_epoch(self) -> None:
+    def _resolve_paths(self, result: TestResult) -> Optional[List[PathLike]]:
+        """Transitions resolver -> a list of paths.
+
+        A custom resolver may still return a single str/Path; that's
+        wrapped rather than rejected.
+        """
+        resolved = self._transitions_path(result)
+        if resolved is None:
+            return None
+        if isinstance(resolved, (str, Path)):
+            return [resolved]
+        return list(resolved)
+
+    def _run_epoch(self) -> bool:
+        """Runs one epoch. Returns True when it completed cleanly."""
         epoch = self._epoch
         t0 = time.monotonic()
 
         # 1. snapshot policies for the playing service
         playing_paths = self.algorithm.save_for_playing(self.save_system.current_dir)
-        event_data = build_model_update_event(playing_paths)
+        event_data = build_model_update_event(
+            playing_paths,
+            stochastic=True if self.stochastic_play else None,
+            hold_frames=self.action_hold_frames if self.stochastic_play else None,
+        )
 
         # 2. run the test
         result = self.test_abstraction.start_test(
@@ -113,26 +160,40 @@ class Trainer:
         if not result.success:
             logger.warning("epoch %d: test failed (%s)", epoch, result.error)
             self.metrics_logger.log_scalar("epoch/duration_seconds", time.monotonic() - t0, step=epoch)
-            return
+            return False
 
-        # 3. ingest transitions
-        path = self._transitions_path(result)
-        if path is None:
+        # 3. ingest transitions -- one file per episode in the batch
+        paths = self._resolve_paths(result)
+        if not paths:
             logger.warning("epoch %d: no transitions path", epoch)
-            return
+            return False
 
-        try:
-            stats = self.algorithm.ingest(path)
-            os.remove(path)
-        except FileNotFoundError:
-            logger.warning("epoch %d: transitions file not found: %s", epoch, path)
-            return
+        totals: Dict[str, Dict[str, float]] = {}
+        for path in paths:
+            try:
+                stats = self.algorithm.ingest(path)
+            except FileNotFoundError:
+                logger.warning("epoch %d: transitions file not found: %s", epoch, path)
+                continue
+            try:
+                os.remove(path)
+            except FileNotFoundError:
+                pass
+            for role_id, st in stats.items():
+                acc = totals.setdefault(
+                    role_id,
+                    {"n": 0, "skipped": 0, "reward_sum": 0.0, "n_terminal": 0},
+                )
+                acc["n"] += st.n
+                acc["skipped"] += st.skipped
+                acc["reward_sum"] += st.reward_sum
+                acc["n_terminal"] += st.n_terminal
 
-        for role_id, st in stats.items():
-            self.metrics_logger.log_scalar(f"{role_id}/transitions_ingested", st.n, step=epoch)
-            self.metrics_logger.log_scalar(f"{role_id}/ingest_skipped", st.skipped, step=epoch)
-            self.metrics_logger.log_scalar(f"{role_id}/episode_return", st.reward_sum, step=epoch)
-            self.metrics_logger.log_scalar(f"{role_id}/terminal_count", st.n_terminal, step=epoch)
+        for role_id, acc in totals.items():
+            self.metrics_logger.log_scalar(f"{role_id}/transitions_ingested", acc["n"], step=epoch)
+            self.metrics_logger.log_scalar(f"{role_id}/ingest_skipped", acc["skipped"], step=epoch)
+            self.metrics_logger.log_scalar(f"{role_id}/episode_return", acc["reward_sum"], step=epoch)
+            self.metrics_logger.log_scalar(f"{role_id}/terminal_count", acc["n_terminal"], step=epoch)
 
         # 4. update
         update_metrics: Dict[str, float] = {}
@@ -147,3 +208,4 @@ class Trainer:
             self.save_system.save(epoch=epoch, algorithm=self.algorithm, metrics=update_metrics)
 
         self.metrics_logger.log_scalar("epoch/duration_seconds", time.monotonic() - t0, step=epoch)
+        return True

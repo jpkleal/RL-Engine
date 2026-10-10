@@ -25,6 +25,8 @@ class TestAbstraction:
         default_result_timeout: float = 600.0,
         max_result_timeout: Optional[float] = 3600.0,
         max_batch_size: Optional[int] = None,
+        result_timeout_base: float = 60.0,
+        result_timeout_per_episode: float = 30.0,
         encoding: str = "utf-8",
     ):
         """
@@ -41,6 +43,10 @@ class TestAbstraction:
         batch_size, checked locally before ever contacting the runner.
         Set to None to skip the check (e.g. if the real limit isn't
         known yet).
+
+        The runner currently sends no ack, so the result deadline has to
+        be derived locally: `result_timeout_base + batch_size *
+        result_timeout_per_episode`.
         """
         self.host = host
         self.port = port
@@ -49,6 +55,8 @@ class TestAbstraction:
         self.default_result_timeout = default_result_timeout
         self.max_result_timeout = max_result_timeout
         self.max_batch_size = max_batch_size
+        self.result_timeout_base = result_timeout_base
+        self.result_timeout_per_episode = result_timeout_per_episode
         self.encoding = encoding
 
     def start_test(
@@ -83,7 +91,10 @@ class TestAbstraction:
 
         payload: Dict[str, Any] = {
             "test_case": test_case_value,
-            "batch_size": batch_size,
+            # Nested under "config": that is where the runner reads it
+            # from. It used to be sent top-level, which the runner
+            # ignored -- every batch silently ran a single episode.
+            "config": {"batch_size": batch_size},
             "input_module": module_value,
             "verbose_out": verbose_out,
         }
@@ -100,9 +111,11 @@ class TestAbstraction:
             self._send_json(sock, payload)
             logger.debug("Sent start_test payload: %s", payload)
 
-            result_timeout = 90  # self._await_ack(sock)
+            result_timeout = (
+                self.result_timeout_base + batch_size * self.result_timeout_per_episode
+            )
             logger.debug(
-                "Received ack from runner, waiting up to %.1fs for result", result_timeout
+                "Waiting up to %.1fs for result of %d episode(s)", result_timeout, batch_size
             )
 
             return self._await_result(sock, result_timeout)
@@ -116,6 +129,11 @@ class TestAbstraction:
         except TestAbstractionError as e:
             logger.error("Protocol error: %s", e)
             return TestResult(success=False, error=str(e))
+        except Exception as e:
+            # The contract above promises start_test never raises; make
+            # that true even for something unexpected.
+            logger.exception("Unexpected error talking to test runner")
+            return TestResult(success=False, error=f"unexpected: {e!r}")
         finally:
             if sock is not None:
                 sock.close()
@@ -183,14 +201,28 @@ class TestAbstraction:
 
         if not isinstance(msg, dict) or "status" not in msg:
             return TestResult(
-                success=False, error=f"result message missing required 'failed' field: {msg}"
+                success=False, error=f"result message missing required 'status' field: {msg}"
             )
 
-        failed = bool(msg["status"] == "error")
-        result_file = msg.get("history_files")[0]
+        if msg["status"] != "success":
+            return TestResult(
+                success=False,
+                error=msg.get("message", "test runner reported error"),
+            )
+
+        history_files = msg.get("history_files")
+        if (
+            not isinstance(history_files, list)
+            or not history_files
+            or not all(isinstance(f, str) for f in history_files)
+        ):
+            return TestResult(
+                success=False,
+                error=f"no history files in result message: {msg}",
+            )
 
         return TestResult(
-            success=not failed,
-            result_file=result_file,
-            error=None if not failed else "test runner reported failure (failed=true)",
+            success=True,
+            result_file=history_files[0],
+            result_files=list(history_files),
         )
