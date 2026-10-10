@@ -44,6 +44,11 @@ class SACConfig:
     replay_capacity: int = 200_000
     min_buffer_size: int = 1_000
     batch_size: int = 256
+    # One gradient step per epoch is one step per thousands of
+    # transitions, which barely moves the policy. Scale the number of
+    # steps to the data that actually arrived.
+    updates_per_transition: float = 0.25
+    max_updates_per_call: int = 5000
 
     def __post_init__(self):
         self.hidden_sizes = tuple(self.hidden_sizes)
