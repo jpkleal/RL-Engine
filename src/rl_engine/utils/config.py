@@ -11,6 +11,9 @@ class RunnerConfig:
     port: int = 9999
     connect_timeout: float = 5.0
     ack_timeout: float = 5.0
+    # The runner sends no ack, so the client derives its own deadline.
+    result_timeout_base: float = 60.0
+    result_timeout_per_episode: float = 30.0
 
 
 @dataclass

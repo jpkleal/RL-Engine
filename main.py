@@ -63,6 +63,8 @@ def build_trainer(cfg):
             port=cfg.runner.port,
             connect_timeout=cfg.runner.connect_timeout,
             ack_timeout=cfg.runner.ack_timeout,
+            result_timeout_base=cfg.runner.result_timeout_base,
+            result_timeout_per_episode=cfg.runner.result_timeout_per_episode,
         ),
         save_system=SaveSystem(cfg.paths.save_dir),
         metrics_logger=MetricsLogger(cfg.paths.log_dir),

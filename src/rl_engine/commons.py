@@ -1,6 +1,6 @@
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from enum import Enum
-from typing import Optional, Dict, Any
+from typing import List, Optional, Dict, Any
 
 
 class TestCase(str, Enum):
@@ -23,9 +23,16 @@ class TestResult:
     success: bool
     result_file: Optional[str] = None
     error: Optional[str] = None
+    # A batch runs one file per episode; result_file stays as the
+    # first (or None) so single-file callers keep working unchanged.
+    result_files: List[str] = field(default_factory=list)
 
 
-def build_model_update_event(model_paths: Dict[str, str]) -> Dict[str, Any]:
+def build_model_update_event(
+    model_paths: Dict[str, str],
+    stochastic: Optional[bool] = None,
+    hold_frames: Optional[int] = None,
+) -> Dict[str, Any]:
     """
     Builds the `event_data` payload for a NEONFC "ModelUpdate" event
     (see test_abstraction.py) from a {model_id: checkpoint_path}

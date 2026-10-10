@@ -74,20 +74,22 @@ class RolloutBuffer:
     def ingest_new_transitions(
             self, path: PathLike, role_id: Optional[str] = None,
             reward_key: Optional[str] = None, reward_sign: float = 1.0
-    ) -> int:
-        """Reads newly-appended lines from `path` and appends this role's
+    ) -> IngestStats:
+        """
+        Reads newly-appended lines from `path` and appends this role's
         transitions. `role_id` selects which agent's action to extract
-        from each timestep. Returns the number ingested."""
+        from each timestep. Returns per-role ingest statistics, matching
+        ReplayMemory so the trainer can treat both the same way.
+        """
         path_str = str(Path(path).resolve())
         with self._lock:
             offset = self._file_cursors.get(path_str, 0)
 
         lines, new_offset = read_new_complete_lines(path, offset)
+        stats = IngestStats()
         if not lines:
-            return 0
+            return stats
 
-        added = 0
-        skipped = 0
         for raw_line in lines:
             try:
                 obj = json.loads(raw_line)
@@ -96,8 +98,8 @@ class RolloutBuffer:
                     self.state_dtype, self.action_dtype,
                     reward_key, reward_sign
                 )
-            except Exception as e:  # noqa: BLE001
-                skipped += 1
+            except Exception as e:  # noqa: BLE001 -- one bad line shouldn't kill ingestion
+                stats.skipped += 1
                 logger.warning("Skipping malformed transition in %s: %s", path, e)
                 continue
 
@@ -107,16 +109,22 @@ class RolloutBuffer:
                 self._rewards.append(r)
                 self._next_states.append(s_next)
                 self._dones.append(done)
-            added += 1
+
+            stats.n += 1
+            stats.reward_sum += r
+            if r != 0.0:
+                stats.n_nonzero_reward += 1
+            if done:
+                stats.n_terminal += 1
 
         with self._lock:
             self._file_cursors[path_str] = new_offset
 
-        if skipped:
-            logger.warning("Ingested %d transitions from %s (%d skipped)", added, path, skipped)
+        if stats.skipped:
+            logger.warning("Ingested %d transitions from %s (%d skipped)", stats.n, path, stats.skipped)
         else:
-            logger.debug("Ingested %d transitions from %s", added, path)
-        return added
+            logger.debug("Ingested %d transitions from %s", stats.n, path)
+        return stats
 
     # ------------------------------------------------------------------ #
     # Consumption
