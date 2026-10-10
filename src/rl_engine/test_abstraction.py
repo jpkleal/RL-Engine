@@ -83,7 +83,10 @@ class TestAbstraction:
 
         payload: Dict[str, Any] = {
             "test_case": test_case_value,
-            "batch_size": batch_size,
+            # Nested under "config": that is where the runner reads it
+            # from. It used to be sent top-level, which the runner
+            # ignored -- every batch silently ran a single episode.
+            "config": {"batch_size": batch_size},
             "input_module": module_value,
             "verbose_out": verbose_out,
         }
