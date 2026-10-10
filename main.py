@@ -36,7 +36,14 @@ def build_algorithm(cfg):
 
     elif t.algorithm == "ppo":
         from rl_engine.algorithms.ppo import SharedCriticPPO
-        return SharedCriticPPO(role_ids, t.state_dim, t.action_dim, cfg.ppo)
+        if t.action_hold_frames > 1:
+            logger.warning(
+                "action_hold_frames=%d with ppo: held actions are not fresh "
+                "on-policy samples, which PPO's importance ratio assumes",
+                t.action_hold_frames,
+            )
+        return SharedCriticPPO(role_ids, t.state_dim, t.action_dim, cfg.ppo,
+                               reward_keys=t.reward_keys, zero_sum=t.zero_sum)
 
     else:
         raise ValueError(f"unknown algorithm {t.algorithm!r}, expected 'sac' or 'ppo'")

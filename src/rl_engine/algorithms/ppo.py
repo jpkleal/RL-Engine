@@ -10,12 +10,11 @@ Network layout:
     value          shared        --  state -> V(s), trained on protagonist convention
 
 Zero-sum convention:
-    The value network is trained on the protagonist's (first role's)
-    return throughout. The antagonist's returns are negated when computing
-    GAE and value targets -- since r_antagonist = -r_protagonist, the
-    shared critic learns V from one consistent perspective.
-    The antagonist's policy gradient is also negated (it minimises the
-    protagonist's value rather than maximising it).
+    None here, deliberately. The shared value network is trained on both
+    roles' returns, and each actor maximises its own advantage. What
+    makes the roles adversarial is the reward *signs* applied when the
+    transitions are ingested (see `zero_sum` in the config), not a sign
+    flip anywhere in the update.
 
 Each role has its own rollout buffer. Both are cleared after every update
 since on-policy data is stale once the policy moves.
@@ -46,6 +45,8 @@ class SharedCriticPPO:
         action_dim: int,
         cfg: PPOConfig = PPOConfig(),
         device: str = "cpu",
+        reward_keys=None,
+        zero_sum=False,
     ):
         self.device = torch.device(device)
         self.gamma = cfg.gamma
@@ -94,6 +95,14 @@ class SharedCriticPPO:
             for role_id in role_ids
         }
 
+        # Same convention as SAC: reward_keys maps a role to the key its
+        # reward lives under, and zero_sum negates the second role's.
+        self._reward_keys = {r: (reward_keys or {}).get(r, r) for r in role_ids}
+        self._reward_signs = {
+            role_ids[0]: 1.0,
+            role_ids[1]: -1.0 if zero_sum else 1.0,
+        }
+
     # ------------------------------------------------------------------ #
     # Algorithm Protocol
     # ------------------------------------------------------------------ #
@@ -103,7 +112,9 @@ class SharedCriticPPO:
         return dict(self._actors)
 
     def ingest(self, path: PathLike) -> Dict[str, int]:
-        return ingest_to_buffers(self._buffers, path)
+        return ingest_to_buffers(
+            self._buffers, path, self._reward_keys, self._reward_signs
+        )
 
     def ready(self) -> bool:
         return all(len(buf) > 0 for buf in self._buffers.values())
@@ -223,7 +234,8 @@ class SharedCriticPPO:
                 log_pi, entropy = self._log_prob_and_entropy(s_mb, a_mb, ant)
                 ratio = (log_pi - old_log_pi_ant[mb]).exp()
                 clipped = ratio.clamp(1 - self.clip_eps, 1 + self.clip_eps)
-                # Antagonist maximises its own advantage (already negated in GAE)
+                # Antagonist maximises its own advantage (its rewards are already
+                # signed in its buffer)
                 policy_loss = -torch.min(ratio * adv_mb, clipped * adv_mb).mean()
                 loss = policy_loss - self.entropy_coef * entropy.mean()
 
