@@ -6,7 +6,7 @@ from typing import Any, Dict, Optional, Union
 
 import torch
 
-from src.rl_engine.model.playing_model import Model
+from .playing_model import Model
 
 logger = logging.getLogger("rl_engine.model")
 
