@@ -34,12 +34,25 @@ def build_algorithm(cfg):
         return SharedCriticSAC(role_ids, t.state_dim, t.action_dim, cfg.sac,
                                reward_keys=t.reward_keys, zero_sum=t.zero_sum)
 
+    elif t.algorithm == "sac_single":
+        from rl_engine.algorithms.single_sac import SAC
+        if len(role_ids) != 1:
+            raise ValueError(
+                f"'sac_single' trains exactly one role, got {list(role_ids)}"
+            )
+        role_id = role_ids[0]
+        reward_key = (t.reward_keys or {}).get(role_id)
+        return SAC(t.state_dim, t.action_dim, role_id=role_id, cfg=cfg.sac,
+                   reward_key=reward_key)
+
     elif t.algorithm == "ppo":
         from rl_engine.algorithms.ppo import SharedCriticPPO
         return SharedCriticPPO(role_ids, t.state_dim, t.action_dim, cfg.ppo)
 
     else:
-        raise ValueError(f"unknown algorithm {t.algorithm!r}, expected 'sac' or 'ppo'")
+        raise ValueError(
+            f"unknown algorithm {t.algorithm!r}, expected 'sac', 'sac_single' or 'ppo'"
+        )
 
 
 def build_trainer(cfg):

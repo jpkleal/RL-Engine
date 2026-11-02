@@ -59,13 +59,17 @@ class TrainableModel(Model):
     # Playing-service-compatible checkpointing
     # ------------------------------------------------------------------ #
 
-    def save(self, path: PathLike) -> None:
+    def save(self, path: PathLike, extra: Optional[Dict[str, Any]] = None) -> None:
         """
         Writes exactly the format playing_model.Model.load()/.update()
         expect. This is the method to call when handing a network off
-        to the playing service.
+        to the playing service. `extra` merges in additional keys
+        (e.g. log_std) that the network itself doesn't carry.
         """
-        self._atomic_save(path, {"layer_sizes": self.layer_sizes, "state_dict": self.state_dict()})
+        checkpoint = {"layer_sizes": self.layer_sizes, "state_dict": self.state_dict()}
+        if extra:
+            checkpoint.update(extra)
+        self._atomic_save(path, checkpoint)
 
     # ------------------------------------------------------------------ #
     # Training-resume checkpointing (superset of the above)

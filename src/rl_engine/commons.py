@@ -7,6 +7,7 @@ class TestCase(str, Enum):
     """Known test cases. Extend as the runner adds more."""
     SHOOTOUT = "SHOOTOUT"
     TEST = "TEST"
+    BALL_APPROACH = "BALL_APPROACH"
 
 
 class InputModule(str, Enum):

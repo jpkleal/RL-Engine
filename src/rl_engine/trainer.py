@@ -133,6 +133,7 @@ class Trainer:
             self.metrics_logger.log_scalar(f"{role_id}/ingest_skipped", st.skipped, step=epoch)
             self.metrics_logger.log_scalar(f"{role_id}/episode_return", st.reward_sum, step=epoch)
             self.metrics_logger.log_scalar(f"{role_id}/terminal_count", st.n_terminal, step=epoch)
+            self.metrics_logger.log_scalar(f"{role_id}/reward", st.reward_sum, step=epoch)
 
         # 4. update
         update_metrics: Dict[str, float] = {}
