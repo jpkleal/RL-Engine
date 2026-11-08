@@ -23,7 +23,7 @@ import logging
 import os
 import time
 from pathlib import Path
-from typing import Callable, Dict, Optional, Union
+from typing import Callable, Dict, List, Optional, Union
 
 from .algorithms import Algorithm
 from .utils.metrics_logger import MetricsLogger
@@ -35,6 +35,19 @@ logger = logging.getLogger("rl_engine.trainer")
 
 PathLike = Union[str, Path]
 TransitionsPathResolver = Callable[[TestResult], Optional[PathLike]]
+
+# Gradient steps per epoch. Sized for roughly one update per collected
+# transition (the update-to-data ratio SAC assumes), given the ~2,560
+# transitions a 25s BALL_APPROACH episode produces at ~100Hz.
+#
+# Previously the loop took a single step per epoch, which is why alpha
+# moved only 0.1 -> 0.070 over 120 epochs: the policy had taken 120
+# gradient steps in total.
+#
+# Don't raise this far above the transition count without adding critic
+# regularization -- high update-to-data ratios amplify Q overestimation,
+# and this setup has only twin critics. Watch q_mean if you do.
+UPDATES_PER_EPOCH = 2560
 
 
 class Trainer:
@@ -138,8 +151,7 @@ class Trainer:
         # 4. update
         update_metrics: Dict[str, float] = {}
         if self.algorithm.ready():
-            update_metrics = self.algorithm.update()
-            self.metrics_logger.log_scalars(update_metrics, step=epoch)
+            update_metrics = self._run_updates(epoch)
         else:
             logger.debug("epoch %d: not ready yet, skipping update", epoch)
 
@@ -148,3 +160,36 @@ class Trainer:
             self.save_system.save(epoch=epoch, algorithm=self.algorithm, metrics=update_metrics)
 
         self.metrics_logger.log_scalar("epoch/duration_seconds", time.monotonic() - t0, step=epoch)
+
+    # ------------------------------------------------------------------ #
+    # Updates
+    # ------------------------------------------------------------------ #
+
+    def _run_updates(self, epoch: int) -> Dict[str, float]:
+        """Run UPDATES_PER_EPOCH gradient steps, logging the mean of each
+        metric once for the epoch.
+
+        Averaging keeps one TensorBoard point per epoch (the same shape the
+        curves had when there was a single step), so a noisy individual
+        batch doesn't read as a trend.
+        """
+        t_update = time.monotonic()
+        collected: List[Dict[str, float]] = []
+
+        for _ in range(UPDATES_PER_EPOCH):
+            collected.append(self.algorithm.update())
+
+        if not collected:
+            return {}
+
+        mean_metrics = {
+            key: sum(m[key] for m in collected) / len(collected)
+            for key in collected[0]
+        }
+
+        self.metrics_logger.log_scalars(mean_metrics, step=epoch)
+        self.metrics_logger.log_scalar("train/updates", float(len(collected)), step=epoch)
+        self.metrics_logger.log_scalar(
+            "train/update_seconds", time.monotonic() - t_update, step=epoch
+        )
+        return mean_metrics

@@ -25,7 +25,7 @@ class TrainableModel(Model):
         """Gradient-enabled forward pass. `inference()` (inherited from
         the playing service's Model) wraps this in torch.no_grad(),
         which is correct for serving but wrong for computing a loss."""
-        return self.network(state.float())
+        return self.network(self._normalize(state))
 
     # ------------------------------------------------------------------ #
     # Target-network style utilities (generic across off-policy algos)
